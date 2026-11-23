@@ -1,0 +1,519 @@
+package app.fonar.ui.home
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavHostController
+import app.fonar.Routes
+import app.fonar.data.FriendRequestDto
+import app.fonar.data.InviteDto
+import app.fonar.data.StoryDto
+import app.fonar.data.UserDto
+import app.fonar.graph
+import app.fonar.openChat
+import app.fonar.ui.components.Avatar
+import app.fonar.ui.components.Banner
+import app.fonar.ui.components.CenterLoading
+import app.fonar.ui.components.Pill
+import app.fonar.ui.components.SectionTitle
+import app.fonar.ui.theme.Fonar
+
+private enum class Tab(val title: String) { STORIES("Истории"), SCENES("Сцены"), FRIENDS("Друзья") }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HomeScreen(nav: NavHostController) {
+    val graph = LocalContext.current.graph
+    val vm: HomeViewModel = viewModel { HomeViewModel(graph) }
+    val state by vm.state.collectAsStateWithLifecycle()
+    var tab by rememberSaveable { mutableStateOf(Tab.STORIES) }
+    val snackbar = remember { SnackbarHostState() }
+    var pickFriendFor by remember { mutableStateOf<StoryDto?>(null) }
+
+    LifecycleResumeEffect(Unit) {
+        vm.refresh()
+        onPauseOrDispose { }
+    }
+    LaunchedEffect(state.message) {
+        state.message?.let { snackbar.showSnackbar(it); vm.consumeMessage() }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Фонарь", style = MaterialTheme.typography.titleLarge)
+                        Text(graph.me?.nick ?: "", style = MaterialTheme.typography.labelMedium, color = Fonar.Muted,
+                            modifier = Modifier.testTag("my_nick"))
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Fonar.Night),
+            )
+        },
+        bottomBar = {
+            NavigationBar(containerColor = Fonar.Surface) {
+                Tab.entries.forEach { t ->
+                    val badge = when (t) {
+                        Tab.SCENES -> state.invites.size
+                        Tab.FRIENDS -> state.friends.incoming.size
+                        else -> 0
+                    }
+                    NavigationBarItem(
+                        selected = tab == t,
+                        onClick = { tab = t },
+                        icon = {
+                            BadgedBox(badge = { if (badge > 0) Badge { Text("$badge") } }) {
+                                Icon(
+                                    when (t) {
+                                        Tab.STORIES -> Icons.AutoMirrored.Outlined.MenuBook
+                                        Tab.SCENES -> Icons.Outlined.Forum
+                                        Tab.FRIENDS -> Icons.Outlined.Group
+                                    }, null,
+                                )
+                            }
+                        },
+                        label = { Text(t.title) },
+                        colors = NavigationBarItemDefaults.colors(indicatorColor = Fonar.SurfaceHigher),
+                        modifier = Modifier.testTag("tab_${t.name.lowercase()}"),
+                    )
+                }
+            }
+        },
+        snackbarHost = { SnackbarHost(snackbar) },
+        containerColor = Fonar.Night,
+    ) { pad ->
+        Box(Modifier.padding(pad).fillMaxSize()) {
+            if (state.loading) CenterLoading()
+            else when (tab) {
+                Tab.STORIES -> StoriesTab(state, vm, nav, onPlayWithFriend = { pickFriendFor = it }, onOpenInvites = { tab = Tab.SCENES })
+                Tab.SCENES -> ScenesTab(state, vm, nav)
+                Tab.FRIENDS -> FriendsTab(state, vm)
+            }
+        }
+    }
+
+    pickFriendFor?.let { story ->
+        FriendPickerDialog(
+            friends = state.friends.friends,
+            title = "Играть с другом",
+            onDismiss = { pickFriendFor = null },
+            onPick = { friend ->
+                pickFriendFor = null
+                vm.startRoom(story.id!!, friend.id) { room -> nav.openChat(room.id) }
+            },
+            onGoToFriends = { pickFriendFor = null; tab = Tab.FRIENDS },
+        )
+    }
+}
+
+@Composable
+fun FriendPickerDialog(
+    friends: List<UserDto>,
+    title: String,
+    onDismiss: () -> Unit,
+    onPick: (UserDto) -> Unit,
+    onGoToFriends: (() -> Unit)? = null,
+) {
+    var selected by remember { mutableStateOf<UserDto?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            if (friends.isEmpty()) {
+                Text("У тебя пока нет друзей, принявших заявку. Найди друга по нику во вкладке «Друзья».", color = Fonar.Muted)
+            } else {
+                Column {
+                    Text("Выбери одного друга — он получит приглашение в приложении.", color = Fonar.Muted,
+                        style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(8.dp))
+                    friends.forEach { f ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { selected = f }.padding(vertical = 6.dp).testTag("pick_${f.nick}"),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = selected?.id == f.id, onClick = { selected = f })
+                            Avatar(f.nick, null, 32.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(f.nick)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (friends.isEmpty()) {
+                if (onGoToFriends != null) TextButton(onClick = onGoToFriends) { Text("К друзьям") }
+            } else {
+                Button(onClick = { selected?.let(onPick) }, enabled = selected != null, modifier = Modifier.testTag("invite_confirm")) {
+                    Text("Пригласить")
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+        containerColor = Fonar.Surface,
+    )
+}
+
+// ------------------------------------------------------------------- stories
+@Composable
+private fun StoriesTab(
+    state: HomeState,
+    vm: HomeViewModel,
+    nav: NavHostController,
+    onPlayWithFriend: (StoryDto) -> Unit,
+    onOpenInvites: () -> Unit,
+) {
+    val graph = LocalContext.current.graph
+    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.testTag("stories_list")) {
+        if (state.offline) item { Banner("Нет связи с сервером — показываю, что есть", Fonar.Error) }
+        if (state.invites.isNotEmpty()) item {
+            Banner("Тебя зовут в сцену: ${state.invites.size}", Fonar.Sea) {
+                TextButton(onClick = onOpenInvites) { Text("Открыть") }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FilledTonalButton(onClick = { nav.navigate(Routes.QUICK) }, modifier = Modifier.weight(1f).testTag("create_quick")) {
+                    Icon(Icons.Outlined.Bolt, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Быстро")
+                }
+                OutlinedButton(onClick = { nav.navigate(Routes.editor()) }, modifier = Modifier.weight(1f).testTag("create_full")) {
+                    Icon(Icons.Outlined.AutoAwesome, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Редактор")
+                }
+            }
+        }
+        if (state.drafts.isNotEmpty()) {
+            item { SectionTitle("Черновики") }
+            items(state.drafts, key = { it.draftId }) { d ->
+                Card(colors = CardDefaults.cardColors(containerColor = Fonar.Surface),
+                    modifier = Modifier.fillMaxWidth().clickable { nav.navigate(Routes.editor(draftId = d.draftId)) }) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(d.story.title.ifBlank { "Без названия" }, fontWeight = FontWeight.SemiBold)
+                            Text("Не сохранено на сервере", color = Fonar.Muted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        IconButton(onClick = { vm.deleteDraft(d.draftId) }) { Icon(Icons.Outlined.Delete, "Удалить черновик", tint = Fonar.Muted) }
+                    }
+                }
+            }
+        }
+        item { SectionTitle("Мои истории") }
+        if (state.stories.none { it.is_demo }) item {
+            TextButton(onClick = { vm.restoreDemo() }) { Text("Вернуть демо-историю") }
+        }
+        items(state.stories, key = { it.id!! }) { s ->
+            StoryCard(
+                s,
+                coverUrl = s.cover_image_id?.let { graph.api.ownImageUrl(it) },
+                avatarUrl = s.avatar_image_id?.let { graph.api.ownImageUrl(it) },
+                onPlay = { vm.startRoom(s.id!!, null) { room -> nav.openChat(room.id) } },
+                onPlayWithFriend = { onPlayWithFriend(s) },
+                onEdit = { nav.navigate(Routes.editor(storyId = s.id)) },
+                onDelete = { vm.deleteStory(s.id!!) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun StoryCard(
+    s: StoryDto,
+    coverUrl: String?,
+    avatarUrl: String?,
+    onPlay: () -> Unit,
+    onPlayWithFriend: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Fonar.Surface),
+        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.fillMaxWidth().testTag("story_${s.title}"),
+    ) {
+        if (coverUrl != null) {
+            coil3.compose.AsyncImage(
+                model = coverUrl, contentDescription = null,
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().height(120.dp),
+            )
+        }
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Avatar(s.character_names.firstOrNull() ?: s.title, avatarUrl, 44.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(s.title, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (s.character_names.isNotEmpty()) {
+                        Text(s.character_names.joinToString(" · "), color = Fonar.Muted, style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (s.is_demo) Pill("демо", Fonar.Lamp)
+                Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Ещё") }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Изменить") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                            onClick = { menu = false; onEdit() })
+                        DropdownMenuItem(text = { Text("Удалить") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                            onClick = { menu = false; confirmDelete = true })
+                    }
+                }
+            }
+            if (s.description.isNotBlank()) {
+                Text(s.description, color = Fonar.Muted, style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 10.dp))
+            }
+            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = onPlayWithFriend, modifier = Modifier.weight(1f).testTag("play_friend_${s.title}")) {
+                    Icon(Icons.Outlined.PersonAdd, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("Играть с другом")
+                }
+                OutlinedButton(onClick = onPlay, modifier = Modifier.testTag("play_${s.title}")) {
+                    Icon(Icons.Outlined.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Одному")
+                }
+            }
+        }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Удалить историю?") },
+            text = { Text("Все сцены этой истории тоже удалятся у обоих игроков.") },
+            confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Удалить", color = Fonar.Error) } },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } },
+            containerColor = Fonar.Surface,
+        )
+    }
+}
+
+// ------------------------------------------------------------------- scenes
+@Composable
+private fun ScenesTab(state: HomeState, vm: HomeViewModel, nav: NavHostController) {
+    val graph = LocalContext.current.graph
+    LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (state.invites.isNotEmpty()) {
+            item { SectionTitle("Приглашения в игру") }
+            items(state.invites, key = { it.id }) { inv -> InviteCard(inv, vm) { nav.openChat(it) } }
+        }
+        item { SectionTitle("Мои сцены") }
+        if (state.rooms.isEmpty()) item {
+            Text("Пока пусто. Открой историю и нажми «Играть с другом» или «Одному».", color = Fonar.Muted)
+        }
+        items(state.rooms, key = { it.id }) { r ->
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Fonar.Surface),
+                modifier = Modifier.fillMaxWidth().clickable { nav.openChat(r.id) }.testTag("room_${r.story_title}"),
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(r.story_title, null, 42.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(r.story_title, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            when {
+                                r.partner != null -> "с ${r.partner.nick}"
+                                else -> "пока одна/один"
+                            } + if (r.my_role == "guest") " · ты гость" else "",
+                            color = Fonar.Sea, style = MaterialTheme.typography.labelMedium,
+                        )
+                        if (r.last_message.isNotBlank()) {
+                            Text(r.last_message.replace("*", ""), color = Fonar.Muted, style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+@Composable
+private fun InviteCard(inv: InviteDto, vm: HomeViewModel, onJoined: (String) -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = Fonar.SurfaceHigh), modifier = Modifier.fillMaxWidth().testTag("invite_card")) {
+        Column(Modifier.padding(14.dp)) {
+            Text("${inv.from?.nick ?: "Друг"} зовёт тебя играть", fontWeight = FontWeight.SemiBold)
+            Text("«${inv.story_title ?: ""}»", color = Fonar.Muted, style = MaterialTheme.typography.bodyMedium)
+            Row(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(onClick = { vm.answerInvite(inv.id, true, onJoined) }, modifier = Modifier.testTag("invite_accept")) { Text("Принять") }
+                OutlinedButton(onClick = { vm.answerInvite(inv.id, false) {} }) { Text("Отклонить") }
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------- friends
+@Composable
+private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
+    var query by rememberSaveable { mutableStateOf("") }
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.imePadding(),
+    ) {
+        item {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { if (it.length <= 24) query = it },
+                label = { Text("Введи ник друга") },
+                singleLine = true,
+                trailingIcon = {
+                    if (state.searchBusy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else IconButton(onClick = { vm.search(query) }, modifier = Modifier.testTag("friend_search_button")) {
+                        Icon(Icons.Outlined.Search, "Найти")
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false),
+                keyboardActions = KeyboardActions(onSearch = { vm.search(query) }),
+                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
+                modifier = Modifier.fillMaxWidth().testTag("friend_search_input"),
+            )
+            Text("Поиск только по полному нику. Списка всех игроков нет.", color = Fonar.Faint,
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp, start = 4.dp))
+        }
+        state.searchError?.let { e -> item { Text(e, color = Fonar.Error, modifier = Modifier.testTag("friend_search_error")) } }
+        state.searchResult?.let { r ->
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = Fonar.SurfaceHigh), modifier = Modifier.testTag("search_result")) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(r.user.nick, null, 44.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text(r.user.nick, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                        when (r.relation) {
+                            "none", "outgoing_declined" -> Button(onClick = { vm.sendRequest(r.user.nick) },
+                                modifier = Modifier.testTag("add_friend")) { Text(if (r.relation == "none") "Добавить" else "Ещё раз") }
+                            "outgoing_pending" -> Pill("Заявка отправлена", Fonar.Lamp, Modifier.testTag("request_sent"))
+                            "friends", "outgoing_accepted" -> Pill("Уже друзья", Fonar.Sea)
+                            "incoming_pending" -> Button(onClick = { r.request_id?.let { vm.answerRequest(it, true) } }) { Text("Принять") }
+                            "self" -> Pill("Это ты", Fonar.Muted)
+                        }
+                    }
+                }
+            }
+        }
+        if (state.friends.incoming.isNotEmpty()) {
+            item { SectionTitle("Входящие заявки") }
+            items(state.friends.incoming, key = { "in" + it.id }) { req -> IncomingRow(req, vm) }
+        }
+        if (state.friends.outgoing.isNotEmpty()) {
+            item { SectionTitle("Мои заявки") }
+            items(state.friends.outgoing, key = { "out" + it.id }) { req ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("outgoing_${req.user.nick}"),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(req.user.nick, null, 36.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text(req.user.nick, modifier = Modifier.weight(1f))
+                    when (req.status) {
+                        "pending" -> Pill("отправлена", Fonar.Lamp)
+                        "accepted" -> Pill("принята", Fonar.Sea)
+                        "declined" -> Pill("отклонена", Fonar.Error)
+                    }
+                }
+            }
+        }
+        item { SectionTitle("Друзья") }
+        if (state.friends.friends.isEmpty()) item {
+            Text("Пока никого. Найди друга по нику и отправь заявку.", color = Fonar.Muted)
+        }
+        items(state.friends.friends, key = { "f" + it.id }) { f ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("friend_${f.nick}"), verticalAlignment = Alignment.CenterVertically) {
+                Avatar(f.nick, null, 40.dp)
+                Spacer(Modifier.width(12.dp))
+                Text(f.nick, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun IncomingRow(req: FriendRequestDto, vm: HomeViewModel) {
+    Card(colors = CardDefaults.cardColors(containerColor = Fonar.Surface), modifier = Modifier.testTag("incoming_${req.user.nick}")) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Avatar(req.user.nick, null, 40.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(req.user.nick, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            TextButton(onClick = { vm.answerRequest(req.id, false) }, modifier = Modifier.testTag("decline_${req.user.nick}")) {
+                Text("Отклонить", color = Fonar.Muted)
+            }
+            Button(onClick = { vm.answerRequest(req.id, true) }, modifier = Modifier.testTag("accept_${req.user.nick}")) { Text("Принять") }
+        }
+    }
+}

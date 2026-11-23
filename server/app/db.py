@@ -1,0 +1,241 @@
+"""SQLite storage.
+
+All database access happens on the asyncio event-loop thread and never spans an
+``await``, so every write transaction is atomic and requests are applied in a
+single, well-defined server order (this is what gives chat messages their
+``seq``)."""
+from __future__ import annotations
+
+import os
+import sqlite3
+import time
+from typing import Any, Iterable
+
+SCHEMA = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS meta(
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  nick TEXT NOT NULL,
+  nick_key TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions(
+  token_hash TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS friend_requests(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK(status IN ('pending','accepted','declined')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(from_user, to_user)
+);
+
+CREATE TABLE IF NOT EXISTS images(
+  id TEXT PRIMARY KEY,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stories(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  intro TEXT NOT NULL DEFAULT '',
+  world_rules TEXT NOT NULL DEFAULT '',
+  start_scene TEXT NOT NULL DEFAULT '',
+  cover_image_id TEXT REFERENCES images(id) ON DELETE SET NULL,
+  is_demo INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS characters(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  role TEXT NOT NULL CHECK(role IN ('npc','hero')),
+  name TEXT NOT NULL,
+  avatar_image_id TEXT REFERENCES images(id) ON DELETE SET NULL,
+  age TEXT NOT NULL DEFAULT '',
+  appearance TEXT NOT NULL DEFAULT '',
+  habits TEXT NOT NULL DEFAULT '',
+  personality TEXT NOT NULL DEFAULT '',
+  motivation TEXT NOT NULL DEFAULT '',
+  backstory TEXT NOT NULL DEFAULT '',
+  speech_style TEXT NOT NULL DEFAULT '',
+  relationships TEXT NOT NULL DEFAULT '{}',
+  example_lines TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS start_messages(
+  id INTEGER PRIMARY KEY,
+  story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  speaker_kind TEXT NOT NULL CHECK(speaker_kind IN ('narrator','character')),
+  character_id INTEGER REFERENCES characters(id) ON DELETE CASCADE,
+  text TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS rooms(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  guest_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  rev INTEGER NOT NULL DEFAULT 0,
+  meta_rev INTEGER NOT NULL DEFAULT 0,
+  next_seq INTEGER NOT NULL DEFAULT 1,
+  scene_location TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  summary_upto_seq INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS room_invites(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  to_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK(status IN ('pending','accepted','declined','cancelled')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(room_id, to_user)
+);
+
+CREATE TABLE IF NOT EXISTS generations(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK(kind IN ('reply','continue','regenerate','summary')),
+  status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')),
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  client_id TEXT,
+  replaces_generation_id INTEGER REFERENCES generations(id) ON DELETE SET NULL,
+  not_before_ms INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  model TEXT,
+  prompt TEXT,
+  card_versions TEXT,
+  raw_output TEXT,
+  prompt_tokens INTEGER,
+  output_tokens INTEGER,
+  prompt_ms INTEGER,
+  output_ms INTEGER,
+  total_ms INTEGER,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  finished_at INTEGER,
+  UNIQUE(room_id, requested_by, client_id)
+);
+CREATE INDEX IF NOT EXISTS generations_queue ON generations(status, id);
+
+CREATE TABLE IF NOT EXISTS messages(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  rev INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('player','character','narrator','system')),
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  character_id INTEGER REFERENCES characters(id) ON DELETE SET NULL,
+  speaker_name TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  client_id TEXT,
+  generation_id INTEGER REFERENCES generations(id) ON DELETE SET NULL,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  UNIQUE(room_id, seq),
+  UNIQUE(room_id, user_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS messages_rev ON messages(room_id, rev);
+
+CREATE TABLE IF NOT EXISTS scene_facts(
+  id INTEGER PRIMARY KEY,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
+  generation_id INTEGER REFERENCES generations(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  text TEXT NOT NULL,
+  hidden INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS scene_facts_room ON scene_facts(room_id, hidden, seq);
+"""
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+class Database:
+    def __init__(self, path: str):
+        self.path = path
+        if path != ":memory:":
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        self.conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA foreign_keys=ON")
+        self.conn.execute("PRAGMA busy_timeout=5000")
+        self.conn.executescript(SCHEMA)
+
+    # -- helpers -------------------------------------------------------
+    def one(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Row | None:
+        return self.conn.execute(sql, tuple(params)).fetchone()
+
+    def all(self, sql: str, params: Iterable[Any] = ()) -> list[sqlite3.Row]:
+        return self.conn.execute(sql, tuple(params)).fetchall()
+
+    def run(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
+        return self.conn.execute(sql, tuple(params))
+
+    def tx(self) -> "_Tx":
+        return _Tx(self.conn)
+
+    def close(self) -> None:
+        self.conn.close()
+
+
+class _Tx:
+    """``with db.tx():`` — BEGIN IMMEDIATE … COMMIT/ROLLBACK."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self.conn = conn
+
+    def __enter__(self):
+        self.conn.execute("BEGIN IMMEDIATE")
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.conn.execute("COMMIT")
+        else:
+            self.conn.execute("ROLLBACK")
+        return False

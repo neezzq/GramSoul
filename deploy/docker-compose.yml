@@ -1,0 +1,53 @@
+# Fonar backend: Caddy (HTTPS, the only public entry) -> FastAPI -> Ollama.
+# Ollama and the SQLite database are never exposed to the internet.
+name: fonar
+
+services:
+  caddy:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./site:/srv/site:ro
+      - ./data/caddy:/data
+      - ./data/caddy-config:/config
+    depends_on:
+      - api
+    mem_limit: 128m
+    logging: &logging
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }
+
+  api:
+    build: ../server
+    image: fonar-api:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      OLLAMA_URL: http://ollama:11434
+    volumes:
+      - ./data/api:/data
+    depends_on:
+      - ollama
+    mem_limit: 300m
+    logging: *logging
+
+  ollama:
+    image: ollama/ollama:0.40.17
+    restart: unless-stopped
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"        # one generation at a time
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_MAX_QUEUE: "8"
+      OLLAMA_KEEP_ALIVE: "-1"
+      OLLAMA_CONTEXT_LENGTH: ${LLM_NUM_CTX:-2048}
+    volumes:
+      - ./data/ollama:/root/.ollama
+    mem_limit: ${OLLAMA_MEM_LIMIT:-1400m}
+    logging: *logging

@@ -1,0 +1,30 @@
+# Secrets and signing material must never be committed
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing/
+.env
+!deploy/.env.example
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+server/data/
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/
+android/captures/
+*.apk
+*.aab
+*.idea/
+*.iml
+.DS_Store
+deploy/data/
+deploy/backups/

@@ -1,0 +1,32 @@
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	handle /v1/* {
+		request_body {
+			max_size 8MB
+		}
+		reverse_proxy api:8000 {
+			flush_interval -1
+			transport http {
+				read_timeout 90s
+			}
+		}
+	}
+
+	# installable APK + a tiny landing page for friends
+	@apk path *.apk
+	header @apk Content-Type "application/vnd.android.package-archive"
+	header @apk Cache-Control "no-cache"
+
+	handle {
+		root * /srv/site
+		file_server
+	}
+}
