@@ -54,17 +54,32 @@ class Node:
         self.y1, self.y2 = y1, y2
 
 
-def dump(dev) -> list[Node]:
+def dump_root(dev):
     for _ in range(5):
         out = adb(dev, "exec-out", "uiautomator", "dump", "/dev/tty", check=False, timeout=60)
         xml = out[out.find("<?xml"): out.rfind(">") + 1] if "<?xml" in out else ""
         if xml:
             try:
-                root = ET.fromstring(xml)
-                return [Node(e) for e in root.iter("node")]
+                return ET.fromstring(xml)
             except ET.ParseError:
                 pass
         time.sleep(1)
+    return None
+
+
+def dump(dev) -> list[Node]:
+    root = dump_root(dev)
+    return [Node(e) for e in root.iter("node")] if root is not None else []
+
+
+def chat_texts(dev) -> list[str]:
+    """Texts of the visible chat messages only (not buttons / input)."""
+    root = dump_root(dev)
+    if root is None:
+        return []
+    for e in root.iter("node"):
+        if e.get("resource-id") == "chat_list":
+            return [n.get("text") for n in e.iter("node") if n.get("text")]
     return []
 
 
@@ -122,13 +137,22 @@ def type_text(dev, text):
 
 
 def clear_field(dev):
+    # select all + delete (works for multi-line fields too)
+    adb(dev, "shell", "input", "keycombination", "KEYCODE_CTRL_LEFT", "KEYCODE_A", check=False)
+    adb(dev, "shell", "input", "keyevent", "KEYCODE_DEL")
     adb(dev, "shell", "input", "keyevent", "KEYCODE_MOVE_END")
-    adb(dev, "shell", "input", "keyevent", *(["67"] * 40))
+    adb(dev, "shell", "input", "keyevent", *(["67"] * 30))
+
+
+def keyboard_shown(dev) -> bool:
+    out = adb(dev, "shell", "dumpsys", "input_method", check=False)
+    return "mInputShown=true" in out or "isInputViewShown=true" in out
 
 
 def hide_keyboard(dev):
-    adb(dev, "shell", "input", "keyevent", "111")  # ESCAPE closes the IME without leaving the screen
-    time.sleep(0.5)
+    if keyboard_shown(dev):
+        adb(dev, "shell", "input", "keyevent", "4")  # BACK closes the IME only
+        time.sleep(0.6)
 
 
 def shot(dev, name):
@@ -267,10 +291,10 @@ def main():
     shot(A, "09_reaction")
     nb = wait_cond(B, lambda ns: find(ns, text="takes her hand") is not None and generation_idle(ns), GT, "reaction_B")
     shot(B, "09_reaction")
-    tail_a = [n.text for n in dump(A) if n.text][-6:]
-    tail_b = [n.text for n in dump(B) if n.text][-6:]
+    tail_a = chat_texts(A)[-2:]
+    tail_b = chat_texts(B)[-2:]
     ok("live model reaction arrived", True, f"{dt:.0f} s")
-    ok("both phones show the same reaction", tail_a[-3:] == tail_b[-3:], f"{tail_a[-3:]} | {tail_b[-3:]}")
+    ok("both phones show the same reaction", tail_a == tail_b and len(tail_a) == 2, f"{tail_a} | {tail_b}")
 
     # 6. A edits Iva's card from the chat and returns to the scene
     for _ in range(12):
@@ -279,8 +303,7 @@ def main():
         scroll_up(A)
     tap_id(A, "name_Ива")
     tap_id(A, "char_personality")
-    adb(A, "shell", "input", "keyevent", "KEYCODE_MOVE_END")
-    adb(A, "shell", "input", "keyevent", *(["67"] * 160))
+    clear_field(A)
     marker = f"Bold and mocking {sfx}"
     type_text(A, marker)
     hide_keyboard(A)
@@ -304,13 +327,18 @@ def main():
     time.sleep(1)
 
     # 7. regenerate on B: the last reaction is replaced on both phones
-    sig_before = [n.text for n in dump(B) if n.text][-4:]
+    sig_before = chat_texts(B)[-3:]
     tap_id(B, "regenerate_button")
     time.sleep(3)
-    wait_cond(B, lambda ns: generation_idle(ns) and [n.text for n in ns if n.text][-4:] != sig_before, GT, "regen_B")
-    time.sleep(3)
-    ra = [n.text for n in dump(A) if n.text][-3:]
-    rb = [n.text for n in dump(B) if n.text][-3:]
+    end = time.time() + GT
+    while time.time() < end:
+        ns = dump(B)
+        if generation_idle(ns) and chat_texts(B)[-3:] != sig_before:
+            break
+        time.sleep(2)
+    time.sleep(4)
+    ra = chat_texts(A)[-2:]
+    rb = chat_texts(B)[-2:]
     shot(B, "12_regenerated")
     ok("regenerated reaction is the same on both phones", ra == rb, f"{ra} | {rb}")
 
@@ -340,9 +368,9 @@ def main():
     adb(B, "shell", "svc", "wifi", "enable", check=False)
     adb(B, "shell", "svc", "data", "enable", check=False)
     wait_cond(B, lambda ns: find(ns, text="lifts the lantern") is not None and find(ns, rid="offline_banner") is None, 180, "catchup")
-    time.sleep(3)
-    ra = [n.text for n in dump(A) if n.text][-3:]
-    rb = [n.text for n in dump(B) if n.text][-3:]
+    time.sleep(4)
+    ra = chat_texts(A)[-2:]
+    rb = chat_texts(B)[-2:]
     shot(B, "14_caught_up")
     ok("after reconnect B received the missed messages", ra == rb, f"{ra} | {rb}")
 

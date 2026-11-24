@@ -20,10 +20,13 @@ jobs:
       contents: write
     env:
       FONAR_BACKEND_URL: ${{ vars.BACKEND_URL || secrets.BACKEND_URL }}
-      FONAR_VERSION_CODE: ${{ github.run_number }}
-      FONAR_VERSION_NAME: 1.0.${{ github.run_number }}
     steps:
       - uses: actions/checkout@v4
+      - name: Version
+        # first hand-built release was versionCode 100; CI builds always go above it
+        run: |
+          echo "FONAR_VERSION_CODE=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
+          echo "FONAR_VERSION_NAME=1.0.$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v4
@@ -86,6 +89,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v1.0.${{ github.run_number }}"
+          TAG="v$FONAR_VERSION_NAME"
           gh release create "$TAG" fonar.apk --target "${{ github.sha }}" --latest \
             --title "Фонарь $TAG" --notes "Установка: скачай fonar.apk на телефон и открой. Обновление ставится поверх предыдущей версии."
