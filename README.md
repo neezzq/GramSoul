@@ -51,15 +51,18 @@ tools/     сценарий двух эмуляторов (adb + uiautomator)
 Открой консоль VPS (веб‑консоль хостера или SSH‑приложение на телефоне) и выполни:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/neezzq/GramSoul/refs/heads/claude/great-keller-r937dd/deploy/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/neezzq/GramSoul/refs/heads/claude/great-keller-r937dd/deploy/install.sh | bash
 ```
+
+Все команды для VPS в этом файле даны для входа под `root` (так обычно и бывает на VPS).
+Если входишь обычным пользователем, добавляй в начало `sudo`.
 
 Скрипт поставит Docker, создаст swap 2 ГБ, скачает код в `/opt/fonar`, получит
 HTTPS‑сертификат (адрес вида `1-2-3-4.sslip.io`, если нет своего домена), загрузит
 модель `qwen2.5:0.5b`, замерит скорость и память и включит ночной бэкап.
 В конце он печатает адрес сервера — его нужно вписать в сборку APK.
 
-Свой домен: `... | sudo bash -s -- --domain fonar.example.com` (A‑запись домена → IP VPS).
+Свой домен: `... | bash -s -- --domain fonar.example.com` (A‑запись домена → IP VPS).
 Порты 80 и 443 должны быть открыты у хостера.
 
 ### Вариант Б — из GitHub Actions
@@ -145,7 +148,7 @@ package `app.fonar` и ключ подписи. Потеряешь ключ — 
 ## Обновление backend
 
 ```bash
-sudo bash /opt/fonar/deploy/update.sh
+bash /opt/fonar/deploy/update.sh
 ```
 
 Делает бэкап, подтягивает код, пересобирает контейнеры, обновляет модель и APK
@@ -155,9 +158,9 @@ sudo bash /opt/fonar/deploy/update.sh
 
 * Автоматически каждую ночь в 04:17: `/opt/fonar/deploy/backups/fonar-*.tar.gz`
   (база SQLite через online‑backup + картинки), хранятся последние 14.
-* Вручную: `sudo bash /opt/fonar/deploy/backup.sh`.
+* Вручную: `bash /opt/fonar/deploy/backup.sh`.
 * Скачать копию к себе: `scp root@<IP>:/opt/fonar/deploy/backups/fonar-<дата>.tar.gz .`
-* Восстановить: `sudo bash /opt/fonar/deploy/restore.sh backups/fonar-<дата>.tar.gz`.
+* Восстановить: `bash /opt/fonar/deploy/restore.sh backups/fonar-<дата>.tar.gz`.
 
 Сессии игроков хранятся в базе, поэтому после восстановления из свежего бэкапа
 телефоны продолжают работать без повторной регистрации.
