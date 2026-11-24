@@ -144,3 +144,6 @@ cd android && FONAR_TEST_BACKEND=http://127.0.0.1:8001 ./gradlew testDebugUnitTe
 Workflow **Emulators (two phones)** запускает два чистых эмулятора Android 14 с
 одним и тем же (минифицированным) APK и проходит весь сценарий двух игроков с живой
 Ollama; скриншоты — в артефактах запуска.
+
+Что именно проверено и где (локально, в GitHub Actions, на VPS, на телефонах) —
+в [docs/VERIFICATION.md](docs/VERIFICATION.md).

@@ -11,6 +11,9 @@ on:
         description: "Run the end-to-end check after deploy"
         type: boolean
         default: true
+  # editing deploy/DEPLOY_REQUEST (e.g. a new date) also starts a deploy
+  push:
+    paths: ["deploy/DEPLOY_REQUEST"]
 
 jobs:
   deploy:
@@ -45,7 +48,7 @@ jobs:
           echo "BACKEND=$URL" >> "$GITHUB_ENV"
           echo "### Backend: $URL" >> "$GITHUB_STEP_SUMMARY"
       - name: Public HTTPS end-to-end (two players + third account)
-        if: inputs.run_e2e
+        if: github.event_name == 'push' || inputs.run_e2e
         run: |
           pip install -q httpx pillow
           python3 server/tests/e2e_live.py "$BACKEND" 900
