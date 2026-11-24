@@ -182,6 +182,18 @@ class Api(
     suspend fun photo(roomId: String, clientId: String, prompt: String): PhotoRes =
         post("/v1/rooms/$roomId/photo", PhotoReq(clientId, prompt))
 
+    suspend fun personas(q: String = "", scope: String = "all"): PersonasRes =
+        get("/v1/personas?q=${q(q)}&scope=$scope")
+    suspend fun persona(id: String): PersonaRes = get("/v1/personas/$id")
+    suspend fun createPersona(p: PersonaReq): PersonaRes = post("/v1/personas", p)
+    suspend fun updatePersona(id: String, p: PersonaReq): PersonaRes = put("/v1/personas/$id", p)
+    suspend fun deletePersona(id: String): OkRes = delete("/v1/personas/$id")
+    suspend fun fillPersona(idea: String): FillRes = post("/v1/personas/fill", FillReq(idea))
+    suspend fun avatarStyles(): AvatarStylesRes = get("/v1/avatar-styles")
+    suspend fun generateAvatar(name: String, description: String, style: String): AvatarGenRes =
+        post("/v1/avatars/generate", AvatarGenReq(name, description, style))
+    fun personaAvatarUrl(p: PersonaDto): String? = p.avatar_image_id?.let { url("/v1/personas/${p.id}/avatar?v=$it") }
+
     fun ownImageUrl(id: String) = url("/v1/images/$id")
     fun roomImageUrl(roomId: String, id: String) = url("/v1/rooms/$roomId/images/$id")
 

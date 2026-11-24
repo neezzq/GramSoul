@@ -214,6 +214,25 @@ CREATE TABLE IF NOT EXISTS transfer_codes(
   attempts INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS transfer_codes_user ON transfer_codes(user_id);
+CREATE TABLE IF NOT EXISTS personas(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  author_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL DEFAULT '',
+  avatar_image_id TEXT REFERENCES images(id) ON DELETE SET NULL,
+  first_message TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  backstory TEXT NOT NULL DEFAULT '',
+  personality TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
+  visibility TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','published')),
+  is_demo INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS personas_author ON personas(author_id);
 """
 
 # columns added after the first release (ALTER TABLE keeps existing data)

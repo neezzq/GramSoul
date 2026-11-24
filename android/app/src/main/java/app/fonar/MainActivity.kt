@@ -55,6 +55,11 @@ object Routes {
     const val CHAT = "chat/{roomId}"
     const val CARD = "card/{roomId}/{charId}"
     const val PROFILE = "profile"
+    const val PERSONA = "persona/{id}"
+    const val PERSONA_EDIT = "persona_edit?id={id}"
+
+    fun persona(id: String) = "persona/$id"
+    fun personaEdit(id: String?) = "persona_edit?id=${id ?: ""}"
 
     fun editor(storyId: String? = null, draftId: String? = null) =
         "editor?storyId=${storyId ?: ""}&draftId=${draftId ?: ""}"
@@ -114,6 +119,11 @@ fun FonarRoot() {
             }
             composable(Routes.CHAT) { e -> ChatScreen(nav, e.arguments!!.getString("roomId")!!) }
             composable(Routes.PROFILE) { app.fonar.ui.profile.ProfileScreen(nav) }
+            composable(Routes.PERSONA) { e -> app.fonar.ui.personas.PersonaScreen(nav, e.arguments!!.getString("id")!!) }
+            composable(
+                Routes.PERSONA_EDIT,
+                arguments = listOf(navArgument("id") { type = NavType.StringType; defaultValue = "" }),
+            ) { e -> app.fonar.ui.personas.PersonaEditorScreen(nav, e.arguments?.getString("id")?.ifBlank { null }) }
             composable(Routes.CARD) { e ->
                 CharacterCardScreen(nav, e.arguments!!.getString("roomId")!!, e.arguments!!.getString("charId")!!)
             }

@@ -326,3 +326,73 @@ data class PhotoReq(val client_id: String, val prompt: String = "")
 
 @Serializable
 data class PhotoRes(val image_job: ImageJobDto? = null, val duplicate: Boolean = false)
+
+
+// ---------------------------------------------------------------- personas (characters, simple mode)
+@Serializable
+data class PersonaAuthor(val id: String, val nick: String)
+
+@Serializable
+data class PersonaDto(
+    val id: String,
+    val name: String = "",
+    val avatar_image_id: String? = null,
+    val description: String = "",
+    val first_message: String = "",
+    val tags: List<String> = emptyList(),
+    val visibility: String = "private",
+    val status: String = "draft",
+    val is_demo: Boolean = false,
+    val author: PersonaAuthor? = null,
+    val mine: Boolean = false,
+    val backstory: String? = null,
+    val personality: String? = null,
+    val updated_at: Long = 0,
+)
+
+@Serializable
+data class PersonaReq(
+    val name: String,
+    val first_message: String,
+    val description: String,
+    val backstory: String,
+    val personality: String,
+    val tags: List<String>,
+    val visibility: String,
+    val status: String,
+    val avatar_image_id: String? = null,
+)
+
+@Serializable
+data class PersonaRes(val persona: PersonaDto)
+
+@Serializable
+data class PersonasRes(val personas: List<PersonaDto> = emptyList())
+
+@Serializable
+data class FillReq(val idea: String)
+
+@Serializable
+data class PersonaFill(
+    val name: String = "",
+    val description: String = "",
+    val personality: String = "",
+    val backstory: String = "",
+    val first_message: String = "",
+    val tags: List<String> = emptyList(),
+)
+
+@Serializable
+data class FillRes(val persona: PersonaFill)
+
+@Serializable
+data class AvatarStyle(val id: String, val label: String)
+
+@Serializable
+data class AvatarStylesRes(val styles: List<AvatarStyle> = emptyList())
+
+@Serializable
+data class AvatarGenReq(val name: String, val description: String, val style: String)
+
+@Serializable
+data class AvatarGenRes(val image_id: String, val width: Int = 0, val height: Int = 0, val style: String = "")

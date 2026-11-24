@@ -9,8 +9,9 @@ from .config import settings
 from .db import Database, now_ms
 
 
-def process_image(raw: bytes, max_side: int = 1280) -> tuple[bytes, int, int]:
-    """Decode, fix orientation, flatten transparency and re-encode as JPEG (strips EXIF/GPS)."""
+def process_image(raw: bytes, max_side: int = 1280, crop: tuple[int, int] | None = None) -> tuple[bytes, int, int]:
+    """Decode, fix orientation, flatten transparency and re-encode as JPEG (strips EXIF/GPS).
+    crop=(2, 3) centre-crops to that width:height ratio (portrait avatars)."""
     from PIL import Image, ImageOps
 
     img = Image.open(io.BytesIO(raw))
@@ -24,6 +25,15 @@ def process_image(raw: bytes, max_side: int = 1280) -> tuple[bytes, int, int]:
             img = bg
         else:
             img = img.convert("RGB")
+    if crop:
+        cw, ch = crop
+        w, h = img.size
+        if w * ch > h * cw:  # too wide
+            nw = h * cw // ch
+            img = img.crop(((w - nw) // 2, 0, (w - nw) // 2 + nw, h))
+        elif w * ch < h * cw:  # too tall
+            nh = w * ch // cw
+            img = img.crop((0, (h - nh) // 2, w, (h - nh) // 2 + nh))
     img.thumbnail((max_side, max_side))
     out = io.BytesIO()
     img.save(out, "JPEG", quality=86, optimize=True)

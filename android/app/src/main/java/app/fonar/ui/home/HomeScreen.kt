@@ -1,6 +1,7 @@
 package app.fonar.ui.home
 
 import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.material.icons.outlined.Face
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.background
@@ -97,7 +98,7 @@ import app.fonar.ui.components.SectionTitle
 import app.fonar.ui.components.exposeTags
 import app.fonar.ui.theme.Fonar
 
-private enum class Tab(val title: String) { STORIES("Истории"), SCENES("Сцены"), FRIENDS("Друзья") }
+private enum class Tab(val title: String) { STORIES("Истории"), CHARACTERS("Персонажи"), SCENES("Сцены"), FRIENDS("Друзья") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,6 +159,7 @@ fun HomeScreen(nav: NavHostController) {
                                 Icon(
                                     when (t) {
                                         Tab.STORIES -> Icons.AutoMirrored.Outlined.MenuBook
+                                        Tab.CHARACTERS -> Icons.Outlined.Face
                                         Tab.SCENES -> Icons.Outlined.Forum
                                         Tab.FRIENDS -> Icons.Outlined.Group
                                     }, null,
@@ -178,6 +180,7 @@ fun HomeScreen(nav: NavHostController) {
             if (state.loading) CenterLoading()
             else when (tab) {
                 Tab.STORIES -> StoriesTab(state, vm, nav, onPlayWithFriend = { pickFriendFor = it }, onOpenInvites = { tab = Tab.SCENES })
+                Tab.CHARACTERS -> app.fonar.ui.personas.PersonasTab(nav)
                 Tab.SCENES -> ScenesTab(state, vm, nav)
                 Tab.FRIENDS -> FriendsTab(state, vm)
             }

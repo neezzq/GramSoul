@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import llm, nick as nickmod, rooms as R, stories as S
+from . import llm, nick as nickmod, personas as PS, rooms as R, stories as S
 from .common import ApiError, User, auth_user, client_ip, hash_token, hub, new_id, new_token, not_found
 from .config import settings
 from .db import Database, now_ms
@@ -39,6 +39,7 @@ state = State()
 async def lifespan(app: FastAPI):
     os.makedirs(settings.images_dir, exist_ok=True)
     state.db = Database(settings.db_path)
+    PS.seed_demo(state.db)
     state.worker = Worker(state.db)
     state.worker.start()
     warm = asyncio.create_task(llm.warmup())
@@ -483,6 +484,63 @@ async def get_room_image(room_id: str, iid: str, user: User = Depends(current_us
     if not R.room_image_allowed(d, user, room_id, iid):
         raise not_found("Изображение не найдено")
     return _image_response(iid)
+
+
+# ---------------------------------------------------------------------------
+# personas — standalone characters (simple mode), AI fill, AI avatars
+# ---------------------------------------------------------------------------
+@app.get("/v1/personas")
+async def list_personas(q: str = "", scope: str = "all", user: User = Depends(current_user), d: Database = Depends(db)):
+    if scope not in ("all", "mine", "drafts", "public"):
+        raise ApiError(400, "bad_scope", "Неизвестный раздел.")
+    return PS.listing(d, user, q[:100], scope)
+
+
+@app.post("/v1/personas", status_code=201)
+async def create_persona(body: PS.PersonaIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"persona:{user.id}", 60, 3600)
+    return PS.create(d, user, body)
+
+
+@app.post("/v1/personas/fill")
+async def fill_persona(body: PS.FillIn, user: User = Depends(current_user)):
+    rate(f"pfill:{user.id}", settings.rl_persona_fill_per_hour, 3600, "Слишком много запросов к ИИ. Попробуй позже.")
+    return await PS.fill(user, body)
+
+
+@app.get("/v1/personas/{pid}")
+async def get_persona(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return PS.get(d, user, pid)
+
+
+@app.put("/v1/personas/{pid}")
+async def update_persona(pid: str, body: PS.PersonaIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    return PS.update(d, user, pid, body)
+
+
+@app.delete("/v1/personas/{pid}")
+async def delete_persona(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return PS.delete(d, user, pid)
+
+
+@app.get("/v1/personas/{pid}/avatar")
+async def persona_avatar(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    row = PS.visible_persona(d, user, pid)
+    if not row["avatar_image_id"]:
+        raise not_found("Аватара нет")
+    return _image_response(row["avatar_image_id"])
+
+
+@app.get("/v1/avatar-styles")
+async def avatar_styles(user: User = Depends(current_user)):
+    return PS.styles()
+
+
+@app.post("/v1/avatars/generate")
+async def generate_avatar(body: PS.AvatarIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"avatar-min:{user.id}", 3, 60)
+    rate(f"avatar-day:{user.id}", settings.rl_avatars_per_day, 86400, "Лимит генерации аватаров на сегодня исчерпан.")
+    return await PS.generate_avatar(d, user, body)
 
 
 # ---------------------------------------------------------------------------

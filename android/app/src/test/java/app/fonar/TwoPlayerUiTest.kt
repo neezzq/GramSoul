@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -158,6 +159,49 @@ class TwoPlayerUiTest {
             shot("05c_people_search")
             compose.onNodeWithTag("add_friend_${other.user.nick}").performClick()
             compose.waitTag("request_sent_${other.user.nick}")
+        }
+    }
+
+    /** Characters: demo list, AI fill from an idea, AI avatar in a chosen style, publish; others see it. */
+    @Test
+    fun createPersonaWithAiAndPublish() {
+        val other = RemotePlayer(backend, uniq("Kira"))
+        ActivityScenario.launch(MainActivity::class.java).use {
+            compose.waitTag("app_version")  // version on the login screen
+            register(uniq("Mira"))
+            compose.onNodeWithTag("tab_characters").performClick()
+            compose.waitTag("persona_card_Вера Солнцева")
+            shot("20_personas")
+            compose.onNodeWithTag("create_persona").performClick()
+            compose.waitTag("fill_idea")
+            compose.onNodeWithTag("fill_idea").performTextInput("хозяйка маяка с секретом")
+            compose.onNodeWithTag("fill_button").performClick()
+            compose.waitText("Ветта")
+            compose.waitText("Опоздал")
+            // AI avatar: description is taken from the card, pick a style, generate, use
+            compose.onNodeWithTag("avatar_tile").performClick()
+            compose.waitTag("avatar_dialog")
+            compose.onNodeWithTag("style_manhwa", useUnmergedTree = true).performClick()
+            compose.onNodeWithTag("avatar_generate", useUnmergedTree = true).performClick()
+            compose.waitTag("avatar_result")
+            shot("21_avatar_ai")
+            compose.onNodeWithTag("avatar_use", useUnmergedTree = true).performClick()
+            compose.onNodeWithTag("visibility_public").performScrollTo().performClick()
+            shot("22_persona_editor")
+            compose.onNodeWithTag("publish").performScrollTo().performClick()
+            compose.waitTag("persona_view")
+            compose.waitTag("persona_avatar")
+            compose.waitText("Твой персонаж")
+            shot("23_persona_view")
+            // another player finds the published character by name, without the hidden fields
+            val seen = other.call { personas("ветта") }.personas.single()
+            assertEquals("Ветта", seen.name)
+            assertTrue(seen.personality == null && seen.avatar_image_id != null)
+            compose.onNodeWithTag("back").performClick()
+            compose.waitTag("persona_card_Ветта")
+            // version in the profile
+            compose.onNodeWithTag("profile_button").performClick()
+            compose.waitTag("app_version")
         }
     }
 

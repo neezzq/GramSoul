@@ -219,7 +219,10 @@ fun ProfileScreen(nav: NavHostController) {
                     ) { Text(if (code == null) "Получить код переноса" else "Новый код") }
                 }
             }
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(24.dp))
+            Text("GramSoul ${app.fonar.BuildConfig.VERSION_NAME}", color = Fonar.Faint,
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("app_version"))
+            Spacer(Modifier.height(24.dp))
         }
     }
 }

@@ -150,12 +150,14 @@ fun Field(
     hint: String? = null,
     maxLength: Int = 1500,
     testTag: String? = null,
+    counter: Boolean = false,
 ) {
     OutlinedTextField(
         value = value,
         onValueChange = { if (it.length <= maxLength) onChange(it) },
         label = { Text(label) },
         placeholder = hint?.let { { Text(it, color = Fonar.Faint) } },
+        supportingText = if (counter) ({ Text("${value.length}/$maxLength", color = Fonar.Faint) }) else null,
         minLines = minLines,
         maxLines = maxLines,
         singleLine = minLines == 1 && maxLines == 1,

@@ -75,6 +75,9 @@ class Settings:
     transfer_code_attempts: int = 5
     online_window_s: int = field(default_factory=lambda: _int("ONLINE_WINDOW_S", 180))
     about_max_chars: int = 300
+    rl_avatars_per_day: int = field(default_factory=lambda: _int("RL_AVATARS_PER_DAY", 20))
+    rl_persona_fill_per_hour: int = field(default_factory=lambda: _int("RL_PERSONA_FILL_PER_HOUR", 30))
+    max_personas_per_user: int = field(default_factory=lambda: _int("MAX_PERSONAS_PER_USER", 100))
     rl_friend_req_per_hour: int = field(default_factory=lambda: _int("RL_FRIEND_REQ_PER_HOUR", 20))
     rl_messages_per_min: int = field(default_factory=lambda: _int("RL_MESSAGES_PER_MIN", 30))
     rl_uploads_per_hour: int = field(default_factory=lambda: _int("RL_UPLOADS_PER_HOUR", 60))

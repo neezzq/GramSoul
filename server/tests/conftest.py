@@ -27,7 +27,8 @@ async def client():
     import app.worker as worker
     import app.llm as llm
     import app.images as images
-    for m in (main, rooms, stories, worker, llm, images):
+    import app.personas as personas
+    for m in (main, rooms, stories, worker, llm, images, personas):
         m.settings = config.settings
     from app.ratelimit import limiter
 

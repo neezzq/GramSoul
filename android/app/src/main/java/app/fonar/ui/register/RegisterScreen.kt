@@ -199,6 +199,9 @@ fun RegisterScreen() {
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center,
         )
+        Spacer(Modifier.height(16.dp))
+        Text("Версия ${app.fonar.BuildConfig.VERSION_NAME}", color = Fonar.Faint.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall, modifier = Modifier.testTag("app_version"))
         Spacer(Modifier.height(24.dp))
     }
 }

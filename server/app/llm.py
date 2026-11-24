@@ -240,7 +240,7 @@ async def _cloud_chat(messages: list[dict], stop: list[str] | None, on_delta: On
                      output_tokens=usage.get("completion_tokens"), total_ms=int((time.monotonic() - t0) * 1000))
 
 
-async def generate_image(prompt: str) -> bytes:
+async def generate_image(prompt: str, aspect_ratio: str = "3:4") -> bytes:
     """Returns encoded image bytes (PNG/JPEG/WebP) from the cloud image model."""
     if settings.llm_backend == "fake":
         return _fake_image(prompt)
@@ -249,7 +249,7 @@ async def generate_image(prompt: str) -> bytes:
         "model": settings.cloud_image_model,
         "messages": [{"role": "user", "content": prompt}],
         "modalities": ["image", "text"],
-        "image_config": {"aspect_ratio": "3:4"},
+        "image_config": {"aspect_ratio": aspect_ratio},
     }
     url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
     try:
@@ -310,6 +310,16 @@ async def _fake_chat(messages: list[dict], on_delta: OnDelta | None) -> LLMResul
         raise LLMError("Тестовая ошибка модели")
     if "#echo_system" in last:  # tests can inspect which prompt variant was used
         return LLMResult(text="Рассказчик: " + ("ОБЛАКО" if "подробно" in system else "ЛОКАЛЬНО") + f" №{n}")
+    if system.startswith("Convert the character description"):
+        return LLMResult(text="REFUSE" if "#refuse" in last else "An adult woman with silver hair and a green coat, calm smile.")
+    if system.startswith("PERSONA_JSON"):
+        if "#badjson" in last:
+            return LLMResult(text="Не могу.")
+        return LLMResult(text='Вот персонаж:\n```json\n' + json.dumps({
+            "name": "Ветта", "description": "Хозяйка ночного маяка. " + last[:40],
+            "personality": "Говорит тихо, с иронией.", "backstory": "Выросла на острове.",
+            "first_message": "*Ты поднимаешься по лестнице маяка.* — Опоздал, — улыбается Ветта.",
+            "tags": ["Маяк", "#мистика", "море"]}, ensure_ascii=False) + "\n```")
     if system.startswith("Ты кратко пересказываешь"):
         return LLMResult(text=f"Краткое содержание №{n}: герои беседовали.")
     m = re.search(r"Пиши за: Рассказчик(?:, ([^.]+))?\.", last)
