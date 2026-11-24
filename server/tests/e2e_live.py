@@ -139,6 +139,9 @@ def main():
     # regenerate
     before = [m for m in c.get(f"/v1/rooms/{rid}/sync", params={"since": 0}, headers=ha).json()["messages"]
               if m["generation_id"] and not m["hidden"]]
+    if not before:
+        check("regenerate (needs a previous AI reaction)", False, "no AI reaction to regenerate")
+        return finish()
     old_gen = before[-1]["generation_id"]
     rr = c.post(f"/v1/rooms/{rid}/regenerate", json={"client_id": cid()}, headers=ha)
     check("regenerate accepted", rr.status_code == 200, rr.text[:100])
@@ -191,7 +194,10 @@ def main():
         pass
     check("third account is denied everywhere (incl. images)", all(s == 404 for s in statuses), str(statuses))
 
-    h = c.get("/v1/health").json()
+    return finish()
+
+
+def finish():
     print("\nTimings:")
     for t in timings:
         tok_s = (t.get("output_tokens") or 0) / max(1, (t.get("output_ms") or 1)) * 1000
