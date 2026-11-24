@@ -126,7 +126,7 @@ cd /opt/fonar/deploy && docker compose up -d && docker compose exec ollama ollam
 Каждый push в `android/` собирает подписанный APK и публикует его как релиз.
 (Внутренний package — `app.fonar`: он не меняется, чтобы обновления вставали поверх.)
 Постоянная ссылка для скачивания с телефона:
-`https://github.com/neezzq/GramSoul/releases/latest/download/fonar.apk`.
+`https://github.com/neezzq/GramSoul/releases/latest/download/GramSoul.apk`.
 Тот же файл раздаёт сам сервер: `https://<адрес-сервера>/fonar.apk`
 (страница `https://<адрес-сервера>/` — для друга).
 

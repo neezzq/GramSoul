@@ -2,7 +2,7 @@ name: Android
 
 # Builds the APK. When the signing secrets and BACKEND_URL are configured it also
 # publishes the signed release APK at
-#   https://github.com/<owner>/<repo>/releases/latest/download/fonar.apk
+#   https://github.com/<owner>/<repo>/releases/latest/download/GramSoul.apk
 on:
   push:
     paths: ["android/**", ".github/workflows/android.yml"]
@@ -23,10 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Version
-        # hand-built release 1.0.1 is versionCode 101; CI builds (run_number + 100, run_number >= 3) go above it
+        # hand-built releases: 1.0.1 = 101, 1.1.0 = 110. CI builds are always above them: 200 + run number.
         run: |
-          echo "FONAR_VERSION_CODE=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
-          echo "FONAR_VERSION_NAME=1.0.$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
+          echo "FONAR_VERSION_CODE=$((GITHUB_RUN_NUMBER + 200))" >> "$GITHUB_ENV"
+          echo "FONAR_VERSION_NAME=1.1.$((GITHUB_RUN_NUMBER + 200))" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v4
@@ -70,8 +70,8 @@ jobs:
           FONAR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           cd android && ./gradlew --no-daemon :app:assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/fonar.apk"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$GITHUB_WORKSPACE/fonar.apk" | head -3
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/GramSoul.apk"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$GITHUB_WORKSPACE/GramSoul.apk" | head -3
 
       - name: Build e2e APK (minified, for emulator tests)
         run: cd android && ./gradlew --no-daemon :app:assembleE2e && cp app/build/outputs/apk/e2e/app-e2e.apk "$GITHUB_WORKSPACE/fonar-e2e.apk"
@@ -80,7 +80,7 @@ jobs:
         with:
           name: apk
           path: |
-            fonar.apk
+            GramSoul.apk
             fonar-e2e.apk
           if-no-files-found: warn
 
@@ -90,5 +90,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v$FONAR_VERSION_NAME"
-          gh release create "$TAG" fonar.apk --target "${{ github.sha }}" --latest \
-            --title "Фонарь $TAG" --notes "Установка: скачай fonar.apk на телефон и открой. Обновление ставится поверх предыдущей версии."
+          gh release create "$TAG" GramSoul.apk --target "${{ github.sha }}" --latest \
+            --title "GramSoul $FONAR_VERSION_NAME" \
+            --notes "Скачай GramSoul.apk на телефон и открой. Обновление ставится поверх предыдущей версии, ник и истории сохраняются. Сервер: $FONAR_BACKEND_URL"
