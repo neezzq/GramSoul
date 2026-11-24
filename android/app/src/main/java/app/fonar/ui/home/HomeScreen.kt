@@ -1,5 +1,9 @@
 package app.fonar.ui.home
 
+import androidx.compose.material.icons.outlined.AccountCircle
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -127,6 +131,12 @@ fun HomeScreen(nav: NavHostController) {
                         )
                         Text(graph.me?.nick ?: "", style = MaterialTheme.typography.labelMedium, color = Fonar.Muted,
                             modifier = Modifier.testTag("my_nick"))
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { nav.navigate(Routes.PROFILE) { launchSingleTop = true } },
+                        modifier = Modifier.testTag("profile_button")) {
+                        Icon(Icons.Outlined.AccountCircle, "Профиль", tint = Fonar.Lamp)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Fonar.Night),
@@ -429,7 +439,15 @@ private fun InviteCard(inv: InviteDto, vm: HomeViewModel, onJoined: (String) -> 
 // ------------------------------------------------------------------- friends
 @Composable
 private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
+    val graph = LocalContext.current.graph
     var query by rememberSaveable { mutableStateOf("") }
+    // search as you type, 300 ms after the last keystroke
+    LaunchedEffect(query) {
+        if (query.trim() != state.searchQuery) {
+            if (query.trim().length >= 2) kotlinx.coroutines.delay(300)
+            vm.search(query)
+        }
+    }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -439,7 +457,7 @@ private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { if (it.length <= 24) query = it },
-                label = { Text("Введи ник друга") },
+                label = { Text("Найти по нику") },
                 singleLine = true,
                 trailingIcon = {
                     if (state.searchBusy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -452,25 +470,31 @@ private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
                 colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
                 modifier = Modifier.fillMaxWidth().testTag("friend_search_input"),
             )
-            Text("Поиск только по полному нику. Списка всех игроков нет.", color = Fonar.Faint,
+            Text("По началу или части ника, от 2 символов", color = Fonar.Faint,
                 style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp, start = 4.dp))
         }
         state.searchError?.let { e -> item { Text(e, color = Fonar.Error, modifier = Modifier.testTag("friend_search_error")) } }
-        state.searchResult?.let { r ->
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = Fonar.SurfaceHigh), modifier = Modifier.testTag("search_result")) {
-                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Avatar(r.user.nick, null, 44.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Text(r.user.nick, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        when (r.relation) {
-                            "none", "outgoing_declined" -> Button(onClick = { vm.sendRequest(r.user.nick) },
-                                modifier = Modifier.testTag("add_friend")) { Text(if (r.relation == "none") "Добавить" else "Ещё раз") }
-                            "outgoing_pending" -> Pill("Заявка отправлена", Fonar.Lamp, Modifier.testTag("request_sent"))
-                            "friends", "outgoing_accepted" -> Pill("Уже друзья", Fonar.Sea)
-                            "incoming_pending" -> Button(onClick = { r.request_id?.let { vm.answerRequest(it, true) } }) { Text("Принять") }
-                            "self" -> Pill("Это ты", Fonar.Muted)
-                        }
+        if (state.searchQuery.length >= 2 && !state.searchBusy && state.searchError == null && state.searchResults.isEmpty()) item {
+            Text("Никого не нашли по «${state.searchQuery}».", color = Fonar.Muted, modifier = Modifier.testTag("search_empty"))
+        }
+        items(state.searchResults, key = { "s" + it.user.id }) { r ->
+            Card(colors = CardDefaults.cardColors(containerColor = Fonar.SurfaceHigh), modifier = Modifier.testTag("search_result_${r.user.nick}")) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Avatar(r.user.nick, graph.api.avatarUrl(r.user), 44.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(r.user.nick, fontWeight = FontWeight.SemiBold)
+                        if (r.user.about.isNotBlank()) Text(r.user.about, color = Fonar.Muted, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    when (r.relation) {
+                        "none", "outgoing_declined" -> Button(onClick = { vm.sendRequest(r.user.nick) },
+                            modifier = Modifier.testTag("add_friend_${r.user.nick}")) { Text(if (r.relation == "none") "В друзья" else "Ещё раз") }
+                        "outgoing_pending" -> Pill("Заявка отправлена", Fonar.Lamp, Modifier.testTag("request_sent_${r.user.nick}"))
+                        "friends", "outgoing_accepted" -> Pill("В друзьях", Fonar.Sea)
+                        "incoming_pending" -> Button(onClick = { r.request_id?.let { vm.answerRequest(it, true) } }) { Text("Принять") }
+                        "self" -> Pill("Это ты", Fonar.Muted)
                     }
                 }
             }
@@ -484,7 +508,7 @@ private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
             items(state.friends.outgoing, key = { "out" + it.id }) { req ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("outgoing_${req.user.nick}"),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Avatar(req.user.nick, null, 36.dp)
+                    Avatar(req.user.nick, graph.api.avatarUrl(req.user), 36.dp)
                     Spacer(Modifier.width(10.dp))
                     Text(req.user.nick, modifier = Modifier.weight(1f))
                     when (req.status) {
@@ -501,12 +525,37 @@ private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
         }
         items(state.friends.friends, key = { "f" + it.id }) { f ->
             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("friend_${f.nick}"), verticalAlignment = Alignment.CenterVertically) {
-                Avatar(f.nick, null, 40.dp)
+                Box {
+                    Avatar(f.nick, graph.api.avatarUrl(f), 40.dp)
+                    if (f.online) Box(
+                        Modifier.align(Alignment.BottomEnd).size(12.dp).clip(CircleShape).background(Fonar.Night)
+                            .padding(2.dp).clip(CircleShape).background(OnlineGreen).testTag("online_${f.nick}"),
+                    )
+                }
                 Spacer(Modifier.width(12.dp))
-                Text(f.nick, style = MaterialTheme.typography.bodyLarge)
+                Column(Modifier.weight(1f)) {
+                    Text(f.nick, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (f.online) "в сети" else lastSeenText(f.last_seen_at),
+                        color = if (f.online) OnlineGreen else Fonar.Faint,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+private val OnlineGreen = androidx.compose.ui.graphics.Color(0xFF4CD787)
+
+private fun lastSeenText(ts: Long?): String {
+    if (ts == null || ts <= 0) return "давно не заходил(а)"
+    val min = (System.currentTimeMillis() - ts) / 60_000
+    return when {
+        min < 60 -> "был(а) ${maxOf(min, 1)} мин назад"
+        min < 24 * 60 -> "был(а) ${min / 60} ч назад"
+        else -> "был(а) ${min / (24 * 60)} дн назад"
     }
 }
 
@@ -514,7 +563,7 @@ private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
 private fun IncomingRow(req: FriendRequestDto, vm: HomeViewModel) {
     Card(colors = CardDefaults.cardColors(containerColor = Fonar.Surface), modifier = Modifier.testTag("incoming_${req.user.nick}")) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Avatar(req.user.nick, null, 40.dp)
+            Avatar(req.user.nick, LocalContext.current.graph.api.avatarUrl(req.user), 40.dp)
             Spacer(Modifier.width(12.dp))
             Text(req.user.nick, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             TextButton(onClick = { vm.answerRequest(req.id, false) }, modifier = Modifier.testTag("decline_${req.user.nick}")) {

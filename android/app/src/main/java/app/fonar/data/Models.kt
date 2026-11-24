@@ -3,7 +3,14 @@ package app.fonar.data
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class UserDto(val id: String, val nick: String)
+data class UserDto(
+    val id: String,
+    val nick: String,
+    val avatar_image_id: String? = null,
+    val about: String = "",
+    val online: Boolean = false,
+    val last_seen_at: Long? = null,
+)
 
 @Serializable
 data class RegisterReq(val nick: String)
@@ -23,6 +30,25 @@ data class ApiErrorDetail(val code: String = "error", val message: String = "–û—
 // ---------------------------------------------------------------- friends
 @Serializable
 data class SearchRes(val user: UserDto, val relation: String, val request_id: String? = null)
+
+@Serializable
+data class PeopleSearchRes(val users: List<SearchRes> = emptyList())
+
+@Serializable
+data class AboutReq(val about: String)
+
+/** "" removes the avatar. */
+@Serializable
+data class AvatarReq(val avatar_image_id: String)
+
+@Serializable
+data class TransferCodeRes(val code: String, val expires_at: Long, val ttl_s: Int = 600)
+
+@Serializable
+data class TransferLoginReq(val nick: String, val code: String)
+
+@Serializable
+data class LoginRes(val token: String, val user: UserDto)
 
 @Serializable
 data class FriendRequestReq(val nick: String)

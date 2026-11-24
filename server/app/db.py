@@ -204,6 +204,16 @@ CREATE TABLE IF NOT EXISTS image_jobs(
   UNIQUE(room_id, requested_by, client_id)
 );
 CREATE INDEX IF NOT EXISTS image_jobs_queue ON image_jobs(status, id);
+CREATE TABLE IF NOT EXISTS transfer_codes(
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS transfer_codes_user ON transfer_codes(user_id);
 """
 
 # columns added after the first release (ALTER TABLE keeps existing data)
@@ -211,6 +221,8 @@ MIGRATIONS = [
     ("rooms", "ai_mode", "ALTER TABLE rooms ADD COLUMN ai_mode TEXT NOT NULL DEFAULT 'local'"),
     ("messages", "image_id", "ALTER TABLE messages ADD COLUMN image_id TEXT"),
     ("generations", "provider", "ALTER TABLE generations ADD COLUMN provider TEXT"),
+    ("users", "avatar_image_id", "ALTER TABLE users ADD COLUMN avatar_image_id TEXT REFERENCES images(id) ON DELETE SET NULL"),
+    ("users", "about", "ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''"),
 ]
 
 

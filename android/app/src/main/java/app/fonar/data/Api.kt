@@ -135,6 +135,13 @@ class Api(
     // ------------------------------------------------------------------ endpoints
     suspend fun register(nick: String): RegisterRes = post("/v1/register", RegisterReq(nick))
     suspend fun me(): MeRes = get("/v1/me")
+    suspend fun setAbout(about: String): MeRes = patch("/v1/me", AboutReq(about))
+    suspend fun setAvatar(imageId: String?): MeRes = patch("/v1/me", AvatarReq(imageId ?: ""))
+    suspend fun transferCode(): TransferCodeRes = postEmpty("/v1/me/transfer-code")
+    suspend fun loginWithTransferCode(nick: String, code: String): LoginRes =
+        post("/v1/login/transfer", TransferLoginReq(nick, code))
+    suspend fun searchPeople(q: String): PeopleSearchRes = get("/v1/users/search?q=${q(q)}")
+    fun avatarUrl(u: UserDto): String? = u.avatar_image_id?.let { url("/v1/users/${u.id}/avatar?v=$it") }
 
     suspend fun search(nick: String): SearchRes = get("/v1/users/search?nick=${q(nick)}")
     suspend fun sendFriendRequest(nick: String): FriendRequestRes = post("/v1/friends/requests", FriendRequestReq(nick))

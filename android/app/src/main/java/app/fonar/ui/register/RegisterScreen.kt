@@ -47,7 +47,7 @@ import app.fonar.graph
 import app.fonar.ui.theme.Fonar
 import kotlinx.coroutines.launch
 
-private val NICK_RE = Regex("^[A-Za-z0-9_\\u0410-\\u044F\\u0401\\u0451]+$")
+private val NICK_RE = Regex("^[A-Za-z0-9_.\\u0410-\\u044F\\u0401\\u0451]+$")
 
 /** Mirrors the server rules so most mistakes are explained before a request is sent. */
 fun localNickError(nick: String): String? {
@@ -56,9 +56,9 @@ fun localNickError(nick: String): String? {
         n.isEmpty() -> null
         n.length < 3 -> "Ник должен быть не короче 3 символов."
         n.length > 20 -> "Ник должен быть не длиннее 20 символов."
-        n.contains(' ') -> "В нике не должно быть пробелов. Можно использовать «_»."
-        !NICK_RE.matches(n) -> "Можно использовать только буквы (латиница или кириллица), цифры и «_»."
-        n.all { it == '_' } -> "Ник не может состоять только из «_»."
+        n.contains(' ') -> "В нике не должно быть пробелов. Можно использовать «_» и «.»."
+        !NICK_RE.matches(n) -> "Можно использовать только буквы (латиница или кириллица), цифры, «_» и «.»."
+        n.all { it == '_' || it == '.' } -> "Ник не может состоять только из «_» и «.»."
         else -> null
     }
 }
@@ -78,6 +78,9 @@ fun RegisterScreen() {
     val graph = LocalContext.current.graph
     val scope = rememberCoroutineScope()
     var nick by rememberSaveable { mutableStateOf("") }
+    var code by rememberSaveable { mutableStateOf("") }
+    var transferMode by rememberSaveable { mutableStateOf(false) }
+    var nickTaken by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val localError = localNickError(nick)
@@ -86,14 +89,21 @@ fun RegisterScreen() {
         val n = nick.trim()
         if (n.isEmpty()) { error = "Введи ник."; return }
         if (localError != null || busy) return
+        if (transferMode && code.count { it.isLetterOrDigit() } < 8) { error = "Введи код переноса — 8 символов."; return }
         busy = true
         error = null
         scope.launch {
             try {
-                val res = graph.api.register(n)
-                graph.onRegistered(res.token, res.user)
+                if (transferMode) {
+                    val res = graph.api.loginWithTransferCode(n, code.trim())
+                    graph.onRegistered(res.token, res.user)
+                } else {
+                    val res = graph.api.register(n)
+                    graph.onRegistered(res.token, res.user)
+                }
             } catch (e: ApiException) {
-                error = e.message
+                nickTaken = e.code == "nick_taken"
+                error = if (nickTaken) "Ник занят. Если это твой ник с другого телефона — войди с кодом переноса." else e.message
             } catch (e: NetworkException) {
                 error = "Нет связи с сервером. Проверь интернет и попробуй ещё раз."
             } finally {
@@ -123,7 +133,7 @@ fun RegisterScreen() {
             style = MaterialTheme.typography.headlineLarge, color = Fonar.Text,
         )
         Text(
-            "Ролевые истории на двоих\nс живым ИИ-рассказчиком",
+            "Ролевые чаты с ИИ-персонажами\nвместе с друзьями",
             style = MaterialTheme.typography.bodyLarge,
             color = Fonar.Muted,
             textAlign = TextAlign.Center,
@@ -132,18 +142,36 @@ fun RegisterScreen() {
         Spacer(Modifier.height(40.dp))
         OutlinedTextField(
             value = nick,
-            onValueChange = { if (it.length <= 24) { nick = it; error = null } },
-            label = { Text("Твой ник") },
+            onValueChange = { if (it.length <= 24) { nick = it; error = null; nickTaken = false } },
+            label = { Text("Ник") },
             singleLine = true,
-            isError = (localError ?: error) != null,
+            isError = localError != null || (!transferMode && error != null),
             supportingText = {
-                Text(localError ?: error ?: "3–20 символов: буквы, цифры и «_»")
+                Text(localError ?: (if (!transferMode) error else null) ?: "3–20 символов: буквы, цифры, «_» и «.»",
+                    modifier = Modifier.testTag("nick_hint"))
             },
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, imeAction = ImeAction.Go),
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
+                imeAction = if (transferMode) ImeAction.Next else ImeAction.Go),
             keyboardActions = KeyboardActions(onGo = { submit() }),
             colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
             modifier = Modifier.fillMaxWidth().testTag("nick_input"),
         )
+        if (transferMode) {
+            Spacer(Modifier.height(4.dp))
+            OutlinedTextField(
+                value = code,
+                onValueChange = { if (it.length <= 12) { code = it.uppercase(); error = null } },
+                label = { Text("Код переноса") },
+                placeholder = { Text("ABCD-EFGH", color = Fonar.Faint) },
+                singleLine = true,
+                isError = error != null,
+                supportingText = { Text(error ?: "Создай код в профиле на старом телефоне — он действует 10 минут") },
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { submit() }),
+                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
+                modifier = Modifier.fillMaxWidth().testTag("transfer_code_input"),
+            )
+        }
         Spacer(Modifier.height(12.dp))
         Button(
             onClick = { submit() },
@@ -151,12 +179,22 @@ fun RegisterScreen() {
             modifier = Modifier.fillMaxWidth().height(54.dp).testTag("start_button"),
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Fonar.OnLamp)
-            else Text("Начать", style = MaterialTheme.typography.titleMedium)
+            else Text("Войти", style = MaterialTheme.typography.titleMedium)
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(8.dp))
+        androidx.compose.material3.TextButton(
+            onClick = { transferMode = !transferMode; error = null; nickTaken = false },
+            modifier = Modifier.testTag("transfer_toggle"),
+        ) {
+            Text(
+                if (transferMode) "Я здесь впервые — создать ник" else "Вход с другого телефона по коду переноса",
+                color = if (nickTaken && !transferMode) Fonar.Lamp else Fonar.Muted,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
         Text(
-            "Без пароля и почты: ник привязывается к этому телефону. " +
-                "Если удалить приложение или его данные, войти под этим ником снова не получится.",
+            "Без пароля и почты: новый ник сразу становится твоим аккаунтом, ключ входа хранится на этом телефоне. " +
+                "Чтобы войти с другого телефона, создай в профиле код переноса.",
             color = Fonar.Faint,
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center,
@@ -183,16 +221,16 @@ fun SessionLostScreen(nick: String?) {
             (if (nick != null) "Ключ входа для ника «$nick» на этом устройстве больше недействителен. " else
                 "Ключ входа на этом устройстве больше недействителен. ") +
                 "Так бывает после переустановки, очистки данных или сброса сервера.\n\n" +
-                "Вход по одному нику невозможен — так никто не сможет войти в чужой аккаунт. " +
-                "Восстановления аккаунта в этой версии нет, поэтому старый ник останется занятым.\n\n" +
-                "Зарегистрируй новый ник и снова добавь друзей.",
+                "Вход по одному нику невозможен — так никто не сможет войти в чужой аккаунт.\n\n" +
+                "Если ник ещё открыт на другом телефоне, создай там в профиле код переноса и войди с ним. " +
+                "Иначе зарегистрируй новый ник.",
             color = Fonar.Muted,
             textAlign = TextAlign.Center,
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(Modifier.height(28.dp))
         OutlinedButton(onClick = { graph.startOver() }, modifier = Modifier.fillMaxWidth().testTag("start_over")) {
-            Text("Зарегистрировать новый ник")
+            Text("Войти с кодом или создать новый ник")
         }
     }
 }

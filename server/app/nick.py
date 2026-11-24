@@ -13,7 +13,7 @@ import unicodedata
 MIN_LEN = 3
 MAX_LEN = 20
 
-_ALLOWED = re.compile(r"^[A-Za-z0-9_А-яЁё]+$")
+_ALLOWED = re.compile(r"^[A-Za-z0-9_.А-яЁё]+$")
 
 # Cyrillic → Latin look-alikes (lower case, after casefold)
 _CONFUSABLES = str.maketrans({
@@ -43,14 +43,14 @@ def validate(raw: str) -> str:
     if len(nick) > MAX_LEN:
         raise NickError("nick_too_long", f"Ник должен быть не длиннее {MAX_LEN} символов.")
     if " " in nick:
-        raise NickError("nick_invalid", "В нике не должно быть пробелов. Можно использовать «_».")
+        raise NickError("nick_invalid", "В нике не должно быть пробелов. Можно использовать «_» и «.».")
     if not _ALLOWED.match(nick):
         raise NickError(
             "nick_invalid",
-            "Можно использовать только буквы (латиница или кириллица), цифры и «_».",
+            "Можно использовать только буквы (латиница или кириллица), цифры, «_» и «.».",
         )
-    if nick.strip("_") == "":
-        raise NickError("nick_invalid", "Ник не может состоять только из «_».")
+    if nick.strip("_.") == "":
+        raise NickError("nick_invalid", "Ник не может состоять только из «_» и «.».")
     return nick
 
 

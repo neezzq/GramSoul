@@ -141,8 +141,9 @@ async def test_reverse_request_accepts(client):
 
 
 async def test_search_rate_limit(client):
+    from app import config
     ha, _ = await register(client, "Mira")
-    for _ in range(20):
+    for _ in range(config.settings.rl_search_per_min):
         await client.get("/v1/users/search", params={"nick": "nobody"}, headers=ha)
     r = await client.get("/v1/users/search", params={"nick": "nobody"}, headers=ha)
     assert r.status_code == 429

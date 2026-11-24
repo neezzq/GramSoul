@@ -289,7 +289,7 @@ def main():
     type_text(B, nick_a.lower())  # someone else's nick, other case
     hide_keyboard(B)
     tap_id(B, "start_button")
-    n = wait(B, text="уже занят", timeout=30)
+    n = wait(B, text="Ник занят", timeout=30)
     shot(B, "02_register_taken")
     ok("B: taken nick refused (no access to A's account)", n is not None)
     tap_id(B, "nick_input")
@@ -307,8 +307,8 @@ def main():
     type_text(A, nick_b.upper())
     tap_id(A, "friend_search_button")
     hide_keyboard(A)
-    tap_id(A, "add_friend")
-    wait(A, rid="request_sent", timeout=30)
+    tap_id(A, f"add_friend_{nick_b}")
+    wait(A, rid=f"request_sent_{nick_b}", timeout=30)
     shot(A, "04_request_sent")
     ok("A found B by full nick and sent a request", True)
 

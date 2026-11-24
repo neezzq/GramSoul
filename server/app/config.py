@@ -67,8 +67,14 @@ class Settings:
     max_characters: int = 10
     max_image_bytes: int = field(default_factory=lambda: _int("MAX_IMAGE_BYTES", 6 * 1024 * 1024))
     rl_register_per_hour: int = field(default_factory=lambda: _int("RL_REGISTER_PER_HOUR", 10))
-    rl_search_per_min: int = field(default_factory=lambda: _int("RL_SEARCH_PER_MIN", 20))
-    rl_search_per_day: int = field(default_factory=lambda: _int("RL_SEARCH_PER_DAY", 300))
+    rl_search_per_min: int = field(default_factory=lambda: _int("RL_SEARCH_PER_MIN", 60))  # search-as-you-type
+    rl_search_per_day: int = field(default_factory=lambda: _int("RL_SEARCH_PER_DAY", 2000))
+    search_min_chars: int = field(default_factory=lambda: _int("SEARCH_MIN_CHARS", 2))
+    search_max_results: int = 20
+    transfer_code_ttl_s: int = field(default_factory=lambda: _int("TRANSFER_CODE_TTL_S", 600))
+    transfer_code_attempts: int = 5
+    online_window_s: int = field(default_factory=lambda: _int("ONLINE_WINDOW_S", 180))
+    about_max_chars: int = 300
     rl_friend_req_per_hour: int = field(default_factory=lambda: _int("RL_FRIEND_REQ_PER_HOUR", 20))
     rl_messages_per_min: int = field(default_factory=lambda: _int("RL_MESSAGES_PER_MIN", 30))
     rl_uploads_per_hour: int = field(default_factory=lambda: _int("RL_UPLOADS_PER_HOUR", 60))

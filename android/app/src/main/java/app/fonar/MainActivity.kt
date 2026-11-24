@@ -54,6 +54,7 @@ object Routes {
     const val EDITOR = "editor?storyId={storyId}&draftId={draftId}"
     const val CHAT = "chat/{roomId}"
     const val CARD = "card/{roomId}/{charId}"
+    const val PROFILE = "profile"
 
     fun editor(storyId: String? = null, draftId: String? = null) =
         "editor?storyId=${storyId ?: ""}&draftId=${draftId ?: ""}"
@@ -112,6 +113,7 @@ fun FonarRoot() {
                 )
             }
             composable(Routes.CHAT) { e -> ChatScreen(nav, e.arguments!!.getString("roomId")!!) }
+            composable(Routes.PROFILE) { app.fonar.ui.profile.ProfileScreen(nav) }
             composable(Routes.CARD) { e ->
                 CharacterCardScreen(nav, e.arguments!!.getString("roomId")!!, e.arguments!!.getString("charId")!!)
             }

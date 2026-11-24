@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import io
 import logging
 import os
+import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 
@@ -121,13 +123,125 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
     except Exception:  # the account must exist even if seeding fails
         log.exception("demo seeding failed")
         demo = None
-    return {"token": token, "user": {"id": u["public_id"], "nick": u["nick"]},
-            "demo_story_id": demo["id"] if demo else None}
+    return {"token": token, "user": _user_dict(u), "demo_story_id": demo["id"] if demo else None}
+
+
+def _user_dict(row) -> dict:
+    """Public profile of a user: what anyone who finds them by nick may see."""
+    return {"id": row["public_id"], "nick": row["nick"], "avatar_image_id": row["avatar_image_id"],
+            "about": row["about"] or ""}
+
+
+def _user_by_id(d: Database, uid: int):
+    return d.one("SELECT id, public_id, nick, avatar_image_id, about FROM users WHERE id=?", (uid,))
+
+
+def _last_seen(d: Database, ids: list[int]) -> dict[int, int]:
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows = d.all(f"SELECT user_id, MAX(last_seen_at) t FROM sessions WHERE user_id IN ({marks}) GROUP BY user_id", ids)
+    return {r["user_id"]: r["t"] for r in rows}
+
+
+def _with_presence(item: dict, last_seen: int | None) -> dict:
+    item["last_seen_at"] = last_seen
+    item["online"] = bool(last_seen and now_ms() - last_seen < settings.online_window_s * 1000)
+    return item
 
 
 @app.get("/v1/me")
-async def me(user: User = Depends(current_user)):
-    return {"user": {"id": user.public_id, "nick": user.nick}}
+async def me(user: User = Depends(current_user), d: Database = Depends(db)):
+    return {"user": _user_dict(_user_by_id(d, user.id))}
+
+
+class ProfileIn(BaseModel):
+    about: str | None = Field(default=None, max_length=2000)
+    avatar_image_id: str | None = Field(default=None, max_length=64)
+
+
+@app.patch("/v1/me")
+async def update_me(body: ProfileIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    sets, params = [], []
+    if "about" in body.model_fields_set:
+        about = (body.about or "").strip()
+        if len(about) > settings.about_max_chars:
+            raise ApiError(400, "about_too_long", f"«О себе» — не длиннее {settings.about_max_chars} символов.")
+        sets.append("about=?")
+        params.append(about)
+    if "avatar_image_id" in body.model_fields_set:
+        iid = body.avatar_image_id or None
+        if iid:
+            row = d.one("SELECT owner_id FROM images WHERE id=?", (iid,))
+            if not row or row["owner_id"] != user.id:
+                raise not_found("Картинка не найдена")
+        sets.append("avatar_image_id=?")
+        params.append(iid)
+    if sets:
+        d.run(f"UPDATE users SET {', '.join(sets)} WHERE id=?", (*params, user.id))
+    return {"user": _user_dict(_user_by_id(d, user.id))}
+
+
+@app.get("/v1/users/{uid}/avatar")
+async def user_avatar(uid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    row = d.one("SELECT avatar_image_id FROM users WHERE public_id=?", (uid,))
+    if not row or not row["avatar_image_id"]:
+        raise not_found("Аватара нет")
+    return _image_response(row["avatar_image_id"])
+
+
+# --- moving an account to another phone: one-time code, created on the old phone ---
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"  # no 0/O, 1/I/L
+
+
+def _norm_code(code: str) -> str:
+    return "".join(ch for ch in (code or "").upper() if ch.isalnum())
+
+
+@app.post("/v1/me/transfer-code")
+async def create_transfer_code(user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"tcode:{user.id}", 10, 3600, "Слишком много кодов подряд. Попробуй позже.")
+    code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
+    ts = now_ms()
+    expires = ts + settings.transfer_code_ttl_s * 1000
+    with d.tx():
+        # only the newest code works
+        d.run("UPDATE transfer_codes SET used_at=? WHERE user_id=? AND used_at IS NULL", (ts, user.id))
+        d.run("INSERT INTO transfer_codes(user_id, code_hash, created_at, expires_at) VALUES(?,?,?,?)",
+              (user.id, hash_token(code), ts, expires))
+    return {"code": code[:4] + "-" + code[4:], "expires_at": expires, "ttl_s": settings.transfer_code_ttl_s}
+
+
+class TransferLoginIn(BaseModel):
+    nick: str = Field(max_length=64)
+    code: str = Field(max_length=32)
+
+
+@app.post("/v1/login/transfer", status_code=201)
+async def login_with_transfer_code(body: TransferLoginIn, request: Request, d: Database = Depends(db)):
+    rate(f"tlogin:{client_ip(request)}", 10, 600, "Слишком много попыток. Подожди 10 минут.")
+    bad = ApiError(400, "bad_transfer_code",
+                   "Неверный ник или код, либо код истёк. Создай новый код в профиле на старом телефоне.")
+    q = nickmod.clean(body.nick)
+    u = d.one("SELECT id FROM users WHERE nick_key=?", (nickmod.key(q),)) if q else None
+    if not u:
+        raise bad
+    rate(f"tlogin-user:{u['id']}", 10, 3600, "Слишком много попыток для этого ника. Попробуй через час.")
+    ts = now_ms()
+    c = d.one("SELECT * FROM transfer_codes WHERE user_id=? AND used_at IS NULL AND expires_at>? ORDER BY id DESC LIMIT 1",
+              (u["id"], ts))
+    if not c or c["attempts"] >= settings.transfer_code_attempts:
+        raise bad
+    code = _norm_code(body.code)
+    if len(code) != 8 or not hmac.compare_digest(hash_token(code), c["code_hash"]):
+        d.run("UPDATE transfer_codes SET attempts=attempts+1 WHERE id=?", (c["id"],))
+        raise bad
+    token = new_token()
+    with d.tx():
+        d.run("UPDATE transfer_codes SET used_at=? WHERE id=?", (ts, c["id"]))
+        d.run("INSERT INTO sessions(token_hash, user_id, created_at, last_seen_at) VALUES(?,?,?,?)",
+              (hash_token(token), u["id"], ts, ts))
+    return {"token": token, "user": _user_dict(_user_by_id(d, u["id"]))}
 
 
 @app.post("/v1/logout")
@@ -138,7 +252,7 @@ async def logout(request: Request, user: User = Depends(current_user), d: Databa
 
 
 # ---------------------------------------------------------------------------
-# friends — exact nickname search only, no user directory
+# friends and people search
 # ---------------------------------------------------------------------------
 def _relation(d: Database, me_id: int, other_id: int) -> tuple[str, str | None]:
     if me_id == other_id:
@@ -155,35 +269,69 @@ def _relation(d: Database, me_id: int, other_id: int) -> tuple[str, str | None]:
 
 
 @app.get("/v1/users/search")
-async def search_user(nick: str, user: User = Depends(current_user), d: Database = Depends(db)):
+async def search_user(q: str | None = None, nick: str | None = None, user: User = Depends(current_user),
+                      d: Database = Depends(db)):
+    """?q= — by the start of a nick or any part of it (case-insensitive, look-alike letters folded),
+    up to 20 people. ?nick= — exact match (kept for older app versions)."""
     rate(f"search:{user.id}", settings.rl_search_per_min, 60)
     rate(f"search-day:{user.id}", settings.rl_search_per_day, 86400, "Лимит поиска на сегодня исчерпан.")
-    q = nickmod.clean(nick)
-    if len(q) < nickmod.MIN_LEN or len(q) > nickmod.MAX_LEN:
-        raise not_found("Игрок с таким ником не найден")
-    row = d.one("SELECT id, public_id, nick FROM users WHERE nick_key=?", (nickmod.key(q),))
+    if q is None:
+        x = nickmod.clean(nick or "")
+        if len(x) < nickmod.MIN_LEN or len(x) > nickmod.MAX_LEN:
+            raise not_found("Игрок с таким ником не найден")
+        row = d.one("SELECT id, public_id, nick, avatar_image_id, about FROM users WHERE nick_key=?", (nickmod.key(x),))
+        if not row:
+            raise not_found("Игрок с таким ником не найден")
+        rel, rid = _relation(d, user.id, row["id"])
+        return {"user": _user_dict(row), "relation": rel, "request_id": rid}
+    qk = nickmod.key(nickmod.clean(q))[: nickmod.MAX_LEN]
+    if len(qk) < settings.search_min_chars:
+        return {"users": []}
+    rows = d.all(
+        "SELECT id, public_id, nick, avatar_image_id, about, instr(nick_key, ?) AS pos FROM users "
+        "WHERE instr(nick_key, ?) > 0 AND id<>? ORDER BY (nick_key=?) DESC, pos, length(nick_key), nick_key LIMIT ?",
+        (qk, qk, user.id, qk, settings.search_max_results),
+    )
+    out = []
+    for r in rows:
+        rel, rid = _relation(d, user.id, r["id"])
+        out.append({"user": _user_dict(r), "relation": rel, "request_id": rid})
+    return {"users": out}
+
+
+@app.get("/v1/users/{uid}")
+async def user_profile(uid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    row = d.one("SELECT id, public_id, nick, avatar_image_id, about FROM users WHERE public_id=?", (uid,))
     if not row:
-        raise not_found("Игрок с таким ником не найден")
+        raise not_found("Игрок не найден")
     rel, rid = _relation(d, user.id, row["id"])
-    return {"user": {"id": row["public_id"], "nick": row["nick"]}, "relation": rel, "request_id": rid}
+    item = _user_dict(row)
+    if rel in ("friends", "outgoing_accepted", "self"):
+        _with_presence(item, _last_seen(d, [row["id"]]).get(row["id"]))
+    return {"user": item, "relation": rel, "request_id": rid}
 
 
 class FriendRequestIn(BaseModel):
-    nick: str = Field(max_length=64)
+    nick: str | None = Field(default=None, max_length=64)
+    user_id: str | None = Field(default=None, max_length=64)
 
 
 def _req_dict(d: Database, r, me_id: int) -> dict:
     other = r["to_user"] if r["from_user"] == me_id else r["from_user"]
-    u = d.one("SELECT public_id, nick FROM users WHERE id=?", (other,))
+    u = _user_by_id(d, other)
     return {"id": r["public_id"], "status": r["status"],
             "direction": "outgoing" if r["from_user"] == me_id else "incoming",
-            "user": {"id": u["public_id"], "nick": u["nick"]}, "updated_at": r["updated_at"]}
+            "user": _user_dict(u), "updated_at": r["updated_at"]}
 
 
 @app.post("/v1/friends/requests")
+@app.post("/v1/friends/request")
 async def send_friend_request(body: FriendRequestIn, user: User = Depends(current_user), d: Database = Depends(db)):
-    q = nickmod.clean(body.nick)
-    row = d.one("SELECT id, public_id, nick FROM users WHERE nick_key=?", (nickmod.key(q),)) if q else None
+    if body.user_id:
+        row = d.one("SELECT id, public_id, nick FROM users WHERE public_id=?", (body.user_id,))
+    else:
+        q = nickmod.clean(body.nick or "")
+        row = d.one("SELECT id, public_id, nick FROM users WHERE nick_key=?", (nickmod.key(q),)) if q else None
     if not row:
         raise not_found("Игрок с таким ником не найден")
     if row["id"] == user.id:
@@ -230,6 +378,12 @@ async def friends(user: User = Depends(current_user), d: Database = Depends(db))
                 inc.append(item)
         else:
             outg.append(item)  # sent / accepted / declined — the sender sees every state
+    pid_to_id = {r["public_id"]: r["id"] for r in d.all(
+        f"SELECT id, public_id FROM users WHERE public_id IN ({','.join('?' * len(fr))})", [f["id"] for f in fr])} if fr else {}
+    seen_at = _last_seen(d, list(pid_to_id.values()))
+    for f in fr:
+        _with_presence(f, seen_at.get(pid_to_id.get(f["id"])))
+    fr.sort(key=lambda f: (not f["online"], f["nick"].casefold()))
     return {"friends": fr, "incoming": inc, "outgoing": outg, "invites": R.list_invites(d, user)}
 
 
@@ -254,6 +408,32 @@ async def accept_request(rid: str, user: User = Depends(current_user), d: Databa
 @app.post("/v1/friends/requests/{rid}/decline")
 async def decline_request(rid: str, user: User = Depends(current_user), d: Database = Depends(db)):
     return _answer_request(d, user, rid, False)
+
+
+class FriendAnswerIn(BaseModel):
+    request_id: str | None = Field(default=None, max_length=64)
+    user_id: str | None = Field(default=None, max_length=64)
+
+
+def _incoming_request_id(d: Database, user: User, body: FriendAnswerIn) -> str:
+    if body.request_id:
+        return body.request_id
+    other = d.one("SELECT id FROM users WHERE public_id=?", (body.user_id or "",))
+    r = d.one("SELECT public_id FROM friend_requests WHERE from_user=? AND to_user=? AND status='pending'",
+              (other["id"], user.id)) if other else None
+    if not r:
+        raise not_found("Заявка не найдена")
+    return r["public_id"]
+
+
+@app.post("/v1/friends/accept")
+async def accept_friend(body: FriendAnswerIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    return _answer_request(d, user, _incoming_request_id(d, user, body), True)
+
+
+@app.post("/v1/friends/decline")
+async def decline_friend(body: FriendAnswerIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    return _answer_request(d, user, _incoming_request_id(d, user, body), False)
 
 
 @app.get("/v1/inbox/wait")

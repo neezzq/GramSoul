@@ -31,9 +31,9 @@ data class HomeState(
     val message: String? = null,
     // friend search
     val searchBusy: Boolean = false,
-    val searchResult: SearchRes? = null,
+    val searchQuery: String = "",
+    val searchResults: List<SearchRes> = emptyList(),
     val searchError: String? = null,
-    val sentFor: String? = null,
 )
 
 class HomeViewModel(private val g: AppGraph) : ViewModel() {
@@ -104,30 +104,40 @@ class HomeViewModel(private val g: AppGraph) : ViewModel() {
     fun consumeMessage() = _state.update { it.copy(message = null) }
 
     // ---------------------------------------------------------------- friends
-    fun search(nick: String) {
-        val n = nick.trim()
-        if (n.isEmpty()) return
-        _state.update { it.copy(searchBusy = true, searchError = null, searchResult = null, sentFor = null) }
-        viewModelScope.launch {
+    private var searchJob: Job? = null
+
+    /** Search by the start or any part of a nick; the screen debounces typing. */
+    fun search(query: String) {
+        val q = query.trim()
+        searchJob?.cancel()
+        if (q.length < 2) {
+            _state.update { it.copy(searchQuery = q, searchResults = emptyList(), searchBusy = false, searchError = null) }
+            return
+        }
+        _state.update { it.copy(searchQuery = q, searchBusy = true, searchError = null) }
+        searchJob = viewModelScope.launch {
             try {
-                val r = g.api.search(n)
-                _state.update { it.copy(searchBusy = false, searchResult = r) }
-            } catch (e: ApiException) {
-                _state.update {
-                    it.copy(searchBusy = false, searchError = if (e.status == 404) "Игрок «$n» не найден. Проверь ник целиком." else e.message)
-                }
+                val r = g.api.searchPeople(q)
+                _state.update { it.copy(searchBusy = false, searchResults = r.users) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _state.update { it.copy(searchBusy = false, searchError = err(e)) }
             }
         }
     }
 
+    private fun setRelation(match: (SearchRes) -> Boolean, rel: String, requestId: String? = null) =
+        _state.update { s ->
+            s.copy(searchResults = s.searchResults.map { if (match(it)) it.copy(relation = rel, request_id = requestId ?: it.request_id) else it })
+        }
+
     fun sendRequest(nick: String) {
         viewModelScope.launch {
             try {
                 val r = g.api.sendFriendRequest(nick)
                 val rel = if (r.already_friends) "friends" else "outgoing_${r.request.status}"
-                _state.update { s -> s.copy(searchResult = s.searchResult?.copy(relation = rel), sentFor = nick) }
+                setRelation({ it.user.nick == nick }, rel, r.request.id)
                 refreshSocial()
             } catch (e: Exception) {
                 _state.update { it.copy(searchError = err(e)) }
@@ -140,9 +150,7 @@ class HomeViewModel(private val g: AppGraph) : ViewModel() {
             try {
                 if (accept) g.api.acceptFriend(id) else g.api.declineFriend(id)
                 refreshSocial()
-                _state.update { s ->
-                    s.copy(searchResult = s.searchResult?.let { r -> if (r.request_id == id) r.copy(relation = if (accept) "friends" else "none") else r })
-                }
+                setRelation({ it.request_id == id }, if (accept) "friends" else "none")
             } catch (e: Exception) {
                 _state.update { it.copy(message = err(e)) }
             }

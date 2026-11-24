@@ -97,7 +97,7 @@ class TwoPlayerUiTest {
             compose.waitText("пробелов")
             compose.onNodeWithTag("nick_input").performTextReplacement(taken.lowercase())
             compose.onNodeWithTag("start_button").performClick()
-            compose.waitText("уже занят")
+            compose.waitText("Ник занят")
             shot("02_register_taken")
             // the taken nick did not log us in
             assertTrue(app.graph.session.value is SessionStore.State.None)
@@ -113,6 +113,54 @@ class TwoPlayerUiTest {
         }
     }
 
+    /** A new phone signs into an existing nick with a one-time transfer code; profile and people search. */
+    @Test
+    fun transferCodeProfileAndSearch() {
+        val nick = uniq("Mira.k")
+        val old = RemotePlayer(backend, nick)
+        val other = RemotePlayer(backend, uniq("Kirill"))
+        other.call { setAbout("Играю за мага") }
+        val code = old.call { transferCode() }.code
+        ActivityScenario.launch(MainActivity::class.java).use {
+            compose.waitTag("nick_input")
+            compose.onNodeWithTag("transfer_toggle").performClick()
+            compose.waitTag("transfer_code_input")
+            compose.onNodeWithTag("nick_input").performTextInput(nick.uppercase())
+            compose.onNodeWithTag("transfer_code_input").performTextInput("WRONG-CODE")
+            compose.onNodeWithTag("start_button").performClick()
+            compose.waitText("Неверный ник или код")
+            compose.onNodeWithTag("transfer_code_input").performTextReplacement(code)
+            shot("02b_transfer_login")
+            compose.onNodeWithTag("start_button").performClick()
+            compose.waitTag("my_nick")
+            val s = (app.graph.session.value as SessionStore.State.Active).session
+            assertEquals(nick, s.nick)
+            assertEquals(old.user.id, s.userId)
+
+            // profile: about + a new transfer code
+            compose.onNodeWithTag("profile_button").performClick()
+            compose.waitTag("profile_nick")
+            compose.waitUntil(10_000) { compose.onAllNodesWithText(nick, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("about_input").performTextInput("Люблю маяки")
+            compose.onNodeWithTag("about_save").performClick()
+            compose.waitUntil(10_000) { old.call { me() }.user.about == "Люблю маяки" }
+            compose.onNodeWithTag("transfer_code_button").performClick()
+            compose.waitTag("transfer_code")
+            shot("05b_profile")
+            compose.onNodeWithTag("back").performClick()
+
+            // people search by a part of the nick
+            compose.waitTag("tab_friends")
+            compose.onNodeWithTag("tab_friends").performClick()
+            compose.onNodeWithTag("friend_search_input").performTextInput(other.user.nick.drop(2).lowercase())
+            compose.waitTag("search_result_${other.user.nick}")
+            compose.waitText("Играю за мага")
+            shot("05c_people_search")
+            compose.onNodeWithTag("add_friend_${other.user.nick}").performClick()
+            compose.waitTag("request_sent_${other.user.nick}")
+        }
+    }
+
     /** Phone A (UI): finds B by nick, sends a request, invites B, plays, edits a card, regenerates. */
     @Test
     fun ownerFlow() {
@@ -124,9 +172,9 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("tab_friends").performClick()
             compose.onNodeWithTag("friend_search_input").performTextInput(b.user.nick.uppercase())
             compose.onNodeWithTag("friend_search_button").performClick()
-            compose.waitTag("add_friend")
-            compose.onNodeWithTag("add_friend").performClick()
-            compose.waitTag("request_sent")
+            compose.waitTag("add_friend_${b.user.nick}")
+            compose.onNodeWithTag("add_friend_${b.user.nick}").performClick()
+            compose.waitTag("request_sent_${b.user.nick}")
             compose.waitTag("outgoing_${b.user.nick}")
             shot("04_friends_sent")
             // B accepts on the other phone
@@ -134,6 +182,8 @@ class TwoPlayerUiTest {
             b.call { acceptFriend(req.id) }
             compose.waitTag("friend_${b.user.nick}", 30_000)
             compose.waitText("принята")
+            // B has just been active → shown online
+            compose.waitTag("online_${b.user.nick}")
             // "Играть с другом" on the demo story
             compose.onNodeWithTag("tab_stories").performClick()
             compose.waitTag("play_friend_Маяк на Стеклянном берегу")
