@@ -37,3 +37,8 @@ def test_prompt_fits_context_and_contains_cards():
     assert "Дерзкая и насмешливая" in b.messages[0]["content"]
     assert b.messages[-1]["role"] == "user" and "Не пиши за героев игроков (Ян)" in b.messages[-1]["content"]
     assert "\nЯн:" in b.stop
+
+
+def test_nested_label_hero_is_dropped():
+    out = P.parse_output("Рассказчик: Лада: *щёлкаю зажигалкой* Ива, спой?\nИва: *улыбается* Ладно.", ["Ива"], ["Ян", "Лада"])
+    assert [(p.name, p.text) for p in out] == [("Ива", "*улыбается* Ладно.")]

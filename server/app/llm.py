@@ -31,7 +31,8 @@ class LLMResult:
 OnDelta = Callable[[str], Awaitable[None]]
 
 
-def _options(num_predict: int | None = None, stop: list[str] | None = None, temperature: float | None = None) -> dict:
+def _options(num_predict: int | None = None, stop: list[str] | None = None, temperature: float | None = None,
+             extra: dict | None = None) -> dict:
     opts = {
         "num_ctx": settings.llm_num_ctx,
         "num_predict": num_predict or settings.llm_num_predict,
@@ -43,11 +44,14 @@ def _options(num_predict: int | None = None, stop: list[str] | None = None, temp
         opts["num_thread"] = settings.llm_num_thread
     if stop:
         opts["stop"] = stop
+    if extra:
+        opts.update(extra)
     return opts
 
 
 async def chat(messages: list[dict], stop: list[str] | None = None, on_delta: OnDelta | None = None,
-               num_predict: int | None = None, temperature: float | None = None) -> LLMResult:
+               num_predict: int | None = None, temperature: float | None = None,
+               extra_options: dict | None = None) -> LLMResult:
     if settings.llm_backend == "fake":
         return await _fake_chat(messages, on_delta)
     body = {
@@ -55,7 +59,7 @@ async def chat(messages: list[dict], stop: list[str] | None = None, on_delta: On
         "messages": messages,
         "stream": True,
         "keep_alive": _keep_alive(),
-        "options": _options(num_predict, stop, temperature),
+        "options": _options(num_predict, stop, temperature, extra_options),
     }
     t0 = time.monotonic()
     text_parts: list[str] = []
@@ -146,8 +150,14 @@ FAKE_COUNTER = {"n": 0}
 async def _fake_chat(messages: list[dict], on_delta: OnDelta | None) -> LLMResult:
     FAKE_COUNTER["n"] += 1
     n = FAKE_COUNTER["n"]
+    prefilled = messages[-1]["role"] == "assistant"
+    if prefilled:
+        messages = messages[:-1]
     last = messages[-1]["content"]
     system = messages[0]["content"]
+    if "#onlyhero" in last and not prefilled:
+        await asyncio.sleep(0.02)
+        return LLMResult(text="Ян: *встаёт* Я пойду.", total_ms=5)
     if "#fail" in last:
         await asyncio.sleep(0.05)
         raise LLMError("Тестовая ошибка модели")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from . import llm
 from . import prompt as P
@@ -163,11 +164,29 @@ class Worker:
         parsed: list[P.ParsedLine] = []
         result = None
         # one automatic second attempt if the small model only repeated the scene or produced nothing usable
-        for attempt in range(2):
-            temperature = None if attempt == 0 else min(1.2, settings.llm_temperature + 0.3)
+        # Small models sometimes answer for a player's hero or copy an earlier line. Such output is
+        # dropped by the parser; then we try again: narrator prefill, a "do not repeat" nudge and a
+        # repeat penalty over the whole context. At most 3 attempts and ~2 minutes in total.
+        t_start = time.monotonic()
+        for attempt in range(3):
+            if attempt and time.monotonic() - t_start > 120:
+                break
+            temperature = None if attempt == 0 else min(1.2, settings.llm_temperature + 0.25 * attempt)
+            messages = [dict(m) for m in built.messages]
+            extra = None
+            prefill = ""
+            if attempt:
+                prefill = P.NARRATOR + ":"
+                messages[-1]["content"] += "\nНе повторяй уже сказанное — придумай новую реакцию, новые детали и действия."
+                messages.append({"role": "assistant", "content": prefill})
+                extra = {"repeat_last_n": -1, "repeat_penalty": max(settings.llm_repeat_penalty, 1.2)}
+                hub.partial_start(room["id"], job["public_id"])
+                hub.partial_add(room["id"], prefill + " ")
             try:
-                result = await llm.chat(built.messages, stop=built.stop, temperature=temperature,
+                result = await llm.chat(messages, stop=built.stop, temperature=temperature, extra_options=extra,
                                         on_delta=lambda piece: self._on_delta(room["id"], piece))
+                if prefill:
+                    result.text = prefill + " " + result.text.lstrip()
             except llm.LLMError as e:
                 hub.partial_clear(room["id"])
                 self._finish_failed(job, f"Модель не ответила: {e}")
@@ -180,7 +199,6 @@ class Worker:
             parsed = P.parse_output(result.text, npc_names, hero_names, history=recent)
             if parsed:
                 break
-            hub.partial_start(room["id"], job["public_id"])
         hub.partial_clear(room["id"])
         if not parsed:
             self._finish_failed(job, "Модель вернула пустой ответ. Попробуй ещё раз.", raw=result.text, result=result)

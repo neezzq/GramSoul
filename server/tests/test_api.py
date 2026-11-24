@@ -443,3 +443,14 @@ async def test_quick_story(client):
     await client.post(f"/v1/rooms/{room['id']}/messages", json={"client_id": cid(), "text": "Привет"}, headers=ha)
     s = await wait_generation(client, ha, room["id"])
     assert s["generation"]["status"] == "done"
+
+
+async def test_hero_only_output_retries_with_narrator_prefill(client):
+    ha, hb, a, b, room = await shared_room(client)
+    rid = room["id"]
+    await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Проверка #onlyhero"}, headers=ha)
+    s = await wait_generation(client, ha, rid)
+    # the first (fake) answer only speaks for a hero and is dropped; the prefilled retry starts as the narrator
+    assert s["generation"]["status"] == "done"
+    ai = [m for m in s["messages"] if m["generation_id"]]
+    assert ai and all("встаёт" not in m["text"] for m in ai)

@@ -63,6 +63,19 @@ def wait_gen(h, room, since_rev=0, timeout=GEN_TIMEOUT):
     raise TimeoutError("generation timeout")
 
 
+def ensure_done(h, room, s, dt):
+    """Like a player pressing «Повторить генерацию» if the small model produced nothing usable."""
+    for _ in range(2):
+        if s["generation"]["status"] == "done":
+            break
+        print(f"      (generation failed: {s['generation'].get('error')}; pressing retry)")
+        c.post(f"/v1/rooms/{room}/retry", json={"client_id": cid()}, headers=h)
+        time.sleep(1)
+        s, dt2, _ = wait_gen(h, room)
+        dt += dt2
+    return s, dt
+
+
 def main():
     print(f"Backend: {BASE}")
     h = c.get("/v1/health").json()
@@ -110,6 +123,7 @@ def main():
     t0 = time.time()
     c.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": text}, headers=ha)
     s, dt, _ = wait_gen(ha, rid)
+    s, dt = ensure_done(ha, rid, s, dt)
     g = s["generation"]
     check("live model reaction", g["status"] == "done", g.get("error") or "")
     timings.append({"step": "first reaction", "seconds": round(dt, 1), **(g.get("stats") or {})})
@@ -131,6 +145,7 @@ def main():
     c.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "*щёлкаю зажигалкой* Ива, спой что-нибудь?"},
            headers=hb)
     s, dt, _ = wait_gen(hb, rid)
+    s, dt = ensure_done(hb, rid, s, dt)
     lp = c.get(f"/v1/rooms/{rid}/last-prompt", headers=ha).json()
     check("next model request contains the saved edit", marker in lp["prompt"],
           f"card v{lp['card_versions'].get(iva['id'])}")
@@ -157,7 +172,8 @@ def main():
     # disconnect / catch-up: B stops syncing, A plays, B resumes from its cursor
     cursor = c.get(f"/v1/rooms/{rid}/sync", params={"since": 0}, headers=hb).json()["rev"]
     c.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "*поднимаю фонарь повыше* Идём к линзе."}, headers=ha)
-    wait_gen(ha, rid)
+    s, dt, _ = wait_gen(ha, rid)
+    ensure_done(ha, rid, s, dt)
     missed = c.get(f"/v1/rooms/{rid}/sync", params={"since": cursor}, headers=hb).json()["messages"]
     check("after reconnect the friend receives missed messages", any("поднимаю фонарь" in m["text"] for m in missed)
           and any(m["generation_id"] for m in missed), f"{len(missed)} missed")

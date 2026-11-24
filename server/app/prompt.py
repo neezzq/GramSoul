@@ -331,6 +331,12 @@ def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int
         if target:
             kind, name = target
             body = m.group(2).strip()
+            # "Рассказчик: Лада: ..." — a nested label decides who is really speaking
+            inner = _LINE_RE.match(body) if body else None
+            inner_target = _match(inner.group(1), npcs, heroes) if inner else None
+            if inner_target:
+                kind, name = inner_target
+                body = inner.group(2).strip()
             if kind == "hero":
                 skipping_hero = True
                 continue
