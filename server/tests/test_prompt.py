@@ -58,3 +58,14 @@ def test_copied_location_line_dropped():
     raw = "Рассказчик: Ветер стихает.\nВерхняя галерея старого маяка, полночь. Линза погасла"
     out = P.parse_output(raw, ["Ива"], ["Ян"], history=hist)
     assert [p.text for p in out] == ["Ветер стихает."]
+
+
+def test_echo_of_scene_facts_is_dropped():
+    facts = ["Ива — не сводит глаз с тумана", "Харитон — кричит снизу и стучит посохом по камню"]
+    raw = ("Рассказчик: Ива - не сводит глаз с тумана; Харитон - кричит снизу и стучит посохом по камню.\n"
+           "Ива: *вздрагивает* Ты слышал? Колокол!")
+    out = P.parse_output(raw, ["Ива", "Харитон"], ["Ян"], facts=facts)
+    assert [(p.name, p.text) for p in out] == [("Ива", "*вздрагивает* Ты слышал? Колокол!")]
+    # a real narration that merely mentions the same people stays
+    raw2 = "Рассказчик: Ива не сводит глаз с тумана, а внизу вдруг гаснет фонарь Харитона, и становится тихо."
+    assert len(P.parse_output(raw2, ["Ива", "Харитон"], ["Ян"], facts=facts)) == 1

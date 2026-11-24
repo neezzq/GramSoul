@@ -346,8 +346,23 @@ def _strip_service(line: str) -> str:
     return line.strip()
 
 
+def _is_fact_echo(text: str, facts: list[str]) -> bool:
+    """True if the text only re-lists scene facts from the prompt ("Ива - смотрит в туман; Харитон - ...")."""
+    if not facts:
+        return False
+    nf = [_norm_text(f) for f in facts if _norm_text(f)]
+    segs = [_norm_text(x) for x in re.split(r"[;\n]", text.replace("*", "")) if _norm_text(x)]
+    if not segs:
+        return False
+    for seg in segs:
+        if not any(seg == f or (len(seg) > 12 and seg in f) or (f in seg and len(seg) <= len(f) * 1.3)
+                   or difflib.SequenceMatcher(None, seg, f).ratio() > 0.85 for f in nf):
+            return False
+    return True
+
+
 def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int = 6,
-                 history: list[str] | None = None) -> list[ParsedLine]:
+                 history: list[str] | None = None, facts: list[str] | None = None) -> list[ParsedLine]:
     """Split model output into narrator / character messages.
 
     Lines attributed to the players' heroes are dropped (the AI must not speak
@@ -406,6 +421,8 @@ def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int
             continue  # e.g. "Харитон: **"
         if _is_repeat(t, seen):
             continue  # copied an earlier line of the scene
+        if _is_fact_echo(t, facts or []):
+            continue  # re-listed the "Уже произошло" block instead of reacting
         seen.append(t)
         result.append(ParsedLine(p.kind, p.name, t[:1500]))
     return result[:max_messages]

@@ -219,6 +219,33 @@ def scroll_up(dev):
     time.sleep(0.8)
 
 
+def scroll_down_a_bit(dev):
+    adb(dev, "shell", "input", "swipe", "540", "1300", "540", "1000", "300")
+    time.sleep(0.8)
+
+
+def open_card_from_chat(dev, name, attempts=12):
+    """Tap a character's name in the chat, but only when it is well inside the list
+    (a name half-hidden under the top bar or the composer would be a tap on them)."""
+    for _ in range(attempts):
+        nodes = dump(dev)
+        lst = find(nodes, rid="chat_list")
+        n = find(nodes, rid=f"name_{name}") or find(nodes, rid=f"avatar_{name}")
+        if n and lst and lst.y1 + 80 < n.cy < lst.y2 - 80:
+            tap(dev, n)
+            try:
+                wait(dev, rid="char_personality", timeout=15, name="card_open")
+                return
+            except TimeoutError:
+                print(f"  (card of {name} did not open after a tap at y={n.cy}; retrying)", flush=True)
+                continue
+        if n and lst and n.cy >= lst.y2 - 80:
+            scroll_down_a_bit(dev)
+        else:
+            scroll_up(dev)
+    raise TimeoutError(f"{dev}: could not open the card of {name} from the chat")
+
+
 def generation_idle(nodes):
     return not find(nodes, rid="generation_status") and not find(nodes, rid="generation_running")
 
@@ -331,11 +358,7 @@ def main():
     ok("both phones show the same reaction", tail_a == tail_b and len(tail_a) == 2, f"{tail_a} | {tail_b}")
 
     # 6. A edits Iva's card from the chat and returns to the scene
-    for _ in range(12):
-        if find(dump(A), rid="name_Ива"):
-            break
-        scroll_up(A)
-    tap_id(A, "name_Ива")
+    open_card_from_chat(A, "Ива")
     tap_id(A, "char_personality")
     clear_field(A)
     marker = f"Bold and mocking {sfx}"

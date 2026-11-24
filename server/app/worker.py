@@ -232,7 +232,7 @@ class Worker:
                 log.exception("generation failed")
                 self._finish_failed(job, f"Ошибка генерации: {type(e).__name__}")
                 return
-            parsed = P.parse_output(result.text, npc_names, hero_names, history=recent)
+            parsed = P.parse_output(result.text, npc_names, hero_names, history=recent, facts=inp.facts)
             if parsed:
                 break
         hub.partial_clear(room["id"])
