@@ -246,6 +246,23 @@ def open_card_from_chat(dev, name, attempts=12):
     raise TimeoutError(f"{dev}: could not open the card of {name} from the chat")
 
 
+def wait_same_tail(dev, tail, timeout, label, extra=None):
+    """Wait until the last two chat lines on `dev` equal `tail` (what the other phone shows)."""
+    end = time.time() + timeout
+    got = []
+    while time.time() < end:
+        nodes = dump(dev)
+        if generation_idle(nodes) and (extra is None or extra(nodes)):
+            got = chat_texts(dev)[-2:]
+            if got == tail:
+                return got
+        time.sleep(2)
+    shot(dev, f"timeout_{label}")
+    print_screen(dev)
+    print(f"  expected tail {tail}, got {got}", flush=True)
+    raise TimeoutError(f"{dev}: {label}")
+
+
 def generation_idle(nodes):
     return not find(nodes, rid="generation_status") and not find(nodes, rid="generation_running")
 
@@ -345,15 +362,15 @@ def main():
     tap_id(A, "send_button")
     hide_keyboard(A)
     t0 = time.time()
+    wait(A, text="takes her hand", timeout=60)
     na = wait_cond(A, lambda ns: generation_idle(ns) and len(narrator_texts(ns)) + len([x for x in ns if x.rid == "msg_character"]) > 0
-                   and find(ns, text="takes her hand") is not None and find(ns, rid="regenerate_button") is not None
+                   and find(ns, rid="regenerate_button") is not None
                    and find(ns, rid="regenerate_button").enabled, GT, "reaction_A")
     dt = time.time() - t0
     shot(A, "09_reaction")
-    nb = wait_cond(B, lambda ns: find(ns, text="takes her hand") is not None and generation_idle(ns), GT, "reaction_B")
-    shot(B, "09_reaction")
     tail_a = chat_texts(A)[-2:]
-    tail_b = chat_texts(B)[-2:]
+    tail_b = wait_same_tail(B, tail_a, GT, "reaction_B")
+    shot(B, "09_reaction")
     ok("live model reaction arrived", True, f"{dt:.0f} s")
     ok("both phones show the same reaction", tail_a == tail_b and len(tail_a) == 2, f"{tail_a} | {tail_b}")
 
@@ -372,8 +389,10 @@ def main():
     type_text(A, "Iva, are you alright?")
     tap_id(A, "send_button")
     hide_keyboard(A)
-    wait_cond(A, lambda ns: find(ns, text="are you alright") is not None and generation_idle(ns)
-              and find(ns, rid="regenerate_button") is not None and find(ns, rid="regenerate_button").enabled, GT, "reaction2")
+    wait(A, text="are you alright", timeout=60)
+    # a long reaction may scroll the player's line off screen — wait for the AI turn to finish instead
+    wait_cond(A, lambda ns: generation_idle(ns) and find(ns, rid="regenerate_button") is not None
+              and find(ns, rid="regenerate_button").enabled, GT, "reaction2")
     tap_id(A, "chat_menu")
     tap_id(A, "menu_prompt")
     pn = wait(A, rid="prompt_text", timeout=30)
@@ -393,9 +412,11 @@ def main():
         if generation_idle(ns) and chat_texts(B)[-3:] != sig_before:
             break
         time.sleep(2)
-    time.sleep(4)
-    ra = chat_texts(A)[-2:]
     rb = chat_texts(B)[-2:]
+    try:
+        ra = wait_same_tail(A, rb, 60, "regenerated_A")
+    except TimeoutError:
+        ra = chat_texts(A)[-2:]
     shot(B, "12_regenerated")
     ok("regenerated reaction is the same on both phones", ra == rb, f"{ra} | {rb}")
 
@@ -448,13 +469,13 @@ def main():
         ok("B shows the offline banner", True)
     except TimeoutError:
         ok("B shows the offline banner", False)
-    wait_cond(A, lambda ns: find(ns, text="lifts the lantern") is not None and generation_idle(ns), GT, "reaction3")
+    wait(A, text="lifts the lantern", timeout=60)
+    wait_cond(A, lambda ns: generation_idle(ns) and (find(ns, rid="retry_button") is not None or (
+        find(ns, rid="regenerate_button") is not None and find(ns, rid="regenerate_button").enabled)), GT, "reaction3")
     adb(B, "shell", "svc", "wifi", "enable", check=False)
     adb(B, "shell", "svc", "data", "enable", check=False)
-    wait_cond(B, lambda ns: find(ns, text="lifts the lantern") is not None and find(ns, rid="offline_banner") is None, 180, "catchup")
-    time.sleep(4)
     ra = chat_texts(A)[-2:]
-    rb = chat_texts(B)[-2:]
+    rb = wait_same_tail(B, ra, 180, "catchup", lambda ns: find(ns, rid="offline_banner") is None)
     shot(B, "14_caught_up")
     ok("after reconnect B received the missed messages", ra == rb, f"{ra} | {rb}")
 
