@@ -161,6 +161,8 @@ class Worker:
             recent = [r["text"] for r in db.all(
                 "SELECT text FROM messages WHERE room_id=? AND hidden=0 AND (generation_id IS NULL OR generation_id<>?) "
                 "ORDER BY seq DESC LIMIT 30", (room["id"], replaces))]
+        # the scene-state/instruction turn is also "already said": an echo of it is not a reaction
+        recent = recent + [l for l in built.messages[-1]["content"].splitlines() if l.strip()]
         parsed: list[P.ParsedLine] = []
         result = None
         # one automatic second attempt if the small model only repeated the scene or produced nothing usable

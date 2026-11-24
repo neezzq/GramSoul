@@ -42,3 +42,19 @@ def test_prompt_fits_context_and_contains_cards():
 def test_nested_label_hero_is_dropped():
     out = P.parse_output("Рассказчик: Лада: *щёлкаю зажигалкой* Ива, спой?\nИва: *улыбается* Ладно.", ["Ива"], ["Ян", "Лада"])
     assert [(p.name, p.text) for p in out] == [("Ива", "*улыбается* Ладно.")]
+
+
+def test_echoed_scene_state_is_removed():
+    raw = ("Рассказчик: *туман ползёт* Теперь всё в порядке.\nВерхняя галерея маяка. Рядом: Ян, Ива. Уже произошло: Ива — плачет]\n"
+           "[Место: маяк. Рядом: Ян]\nИва: Пойдём.")
+    out = P.parse_output(raw, ["Ива"], ["Ян"])
+    texts = " ".join(p.text for p in out)
+    assert "Рядом:" not in texts and "Уже произошло" not in texts and "Место:" not in texts
+    assert out[-1].name == "Ива" and out[-1].text == "Пойдём."
+
+
+def test_copied_location_line_dropped():
+    hist = ["[Место: Верхняя галерея старого маяка, полночь. Линза погасла, внизу светится песок. Рядом: Ян]"]
+    raw = "Рассказчик: Ветер стихает.\nВерхняя галерея старого маяка, полночь. Линза погасла"
+    out = P.parse_output(raw, ["Ива"], ["Ян"], history=hist)
+    assert [p.text for p in out] == ["Ветер стихает."]

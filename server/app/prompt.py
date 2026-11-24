@@ -311,6 +311,25 @@ def _is_repeat(text: str, history: list[str]) -> bool:
     return False
 
 
+# Fragments of our own instructions / scene-state block that small models sometimes echo back.
+_SERVICE_MARKERS = ("Место:", "Рядом:", "Уже произошло:", "Пиши за:", "Не пиши за", "Ответь на последний ход",
+                    "Продолжи сцену", "Что было раньше:", "Герои игроков", "Твои персонажи:", "Не повторяй уже сказанное")
+
+
+def _strip_service(line: str) -> str:
+    """Cut an echoed instruction/state fragment out of a line of model output."""
+    cut = len(line)
+    for m in _SERVICE_MARKERS:
+        i = line.find(m)
+        if i != -1:
+            cut = min(cut, i)
+    if cut < len(line):
+        line = line[:cut].rstrip(" ;,[")
+        if line.startswith("[") and "]" not in line:
+            line = line[1:]
+    return line.strip()
+
+
 def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int = 6,
                  history: list[str] | None = None) -> list[ParsedLine]:
     """Split model output into narrator / character messages.
@@ -321,7 +340,7 @@ def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int
     out: list[ParsedLine] = []
     skipping_hero = False
     for raw_line in (raw or "").splitlines():
-        line = raw_line.strip()
+        line = _strip_service(raw_line.strip())
         if not line:
             continue
         if line.startswith("<|") or line.lower().startswith(("assistant", "user", "system")):
@@ -350,6 +369,8 @@ def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int
             continue
         if skipping_hero:
             continue
+        if history and _is_repeat(line, history):
+            continue  # an unlabelled line copied from the scene/instructions
         if m and not target and len(m.group(1).split()) <= 3 and m.group(1)[:1].isupper():
             # "Unknown Name: text" — keep the text as narration, drop the unknown label
             body = m.group(2).strip()
