@@ -69,3 +69,15 @@ def test_echo_of_scene_facts_is_dropped():
     # a real narration that merely mentions the same people stays
     raw2 = "Рассказчик: Ива не сводит глаз с тумана, а внизу вдруг гаснет фонарь Харитона, и становится тихо."
     assert len(P.parse_output(raw2, ["Ива", "Харитон"], ["Ян"], facts=facts)) == 1
+
+
+def test_short_player_lines_do_not_make_everything_a_repeat():
+    raw = ("Рассказчик: Ночной город за окном мерцает россыпью огней, где-то на кухне капает кран.\n\n"
+           "ММ: *откидывается на спинку* А — это первая буква и первое слово. Ты устал, я вижу.")
+    for short in ("А", "да", "ок", "Ну?"):
+        out = P.parse_output(raw, ["ММ"], ["Ян"], history=["ночь огни и все так и не спит", short], facts=[])
+        assert [p.name for p in out] == ["Рассказчик", "ММ"], short
+    # a real copy of an earlier long line is still dropped
+    old = "Ночной город за окном мерцает россыпью огней, где-то на кухне капает кран."
+    out = P.parse_output(raw, ["ММ"], ["Ян"], history=[old])
+    assert [p.name for p in out] == ["ММ"]

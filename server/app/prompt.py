@@ -320,7 +320,9 @@ def _is_repeat(text: str, history: list[str]) -> bool:
         hn = _norm_text(h)
         if not hn:
             continue
-        if n == hn or (len(n) > 25 and (n in hn or hn in n)):
+        # containment counts only between substantial texts: a short player line ("А", "да")
+        # is a substring of almost any reply and must not make it a "repeat"
+        if n == hn or (len(n) > 25 and len(hn) > 25 and (n in hn or hn in n)):
             return True
         if len(n) > 25 and difflib.SequenceMatcher(None, n, hn).ratio() > 0.85:
             return True
