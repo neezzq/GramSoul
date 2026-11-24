@@ -51,6 +51,7 @@ import androidx.navigation.NavHostController
 import app.fonar.Routes
 import app.fonar.data.PersonaDto
 import app.fonar.graph
+import app.fonar.openChat
 import app.fonar.ui.components.CenterLoading
 import app.fonar.ui.components.ErrorBox
 import app.fonar.ui.components.Pill
@@ -139,6 +140,34 @@ fun PersonaScreen(nav: NavHostController, id: String) {
                     },
                     color = Fonar.Muted, style = MaterialTheme.typography.bodyMedium,
                 )
+                Spacer(Modifier.height(12.dp))
+                var starting by remember { mutableStateOf(false) }
+                androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            starting = true
+                            scope.launch {
+                                try {
+                                    val room = graph.api.startChat(p.id).room
+                                    nav.openChat(room.id)
+                                } catch (e: Exception) {
+                                    error = errText(e)
+                                } finally {
+                                    starting = false
+                                }
+                            }
+                        },
+                        enabled = !starting,
+                        modifier = Modifier.weight(1f).testTag("persona_chat_new"),
+                    ) { Text(if (p.chats.isEmpty()) "Начать чат" else "Новый чат") }
+                    p.chats.firstOrNull()?.let { last ->
+                        androidx.compose.material3.OutlinedButton(
+                            onClick = { nav.openChat(last.id) },
+                            modifier = Modifier.weight(1f).testTag("persona_chat_continue"),
+                        ) { Text("Продолжить") }
+                    }
+                }
+                error?.let { Text(it, color = Fonar.Error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
                 Spacer(Modifier.height(8.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
                     verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {

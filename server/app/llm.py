@@ -320,6 +320,22 @@ async def _fake_chat(messages: list[dict], on_delta: OnDelta | None) -> LLMResul
             "personality": "Говорит тихо, с иронией.", "backstory": "Выросла на острове.",
             "first_message": "*Ты поднимаешься по лестнице маяка.* — Опоздал, — улыбается Ветта.",
             "tags": ["Маяк", "#мистика", "море"]}, ensure_ascii=False) + "\n```")
+    if system.startswith("Ты помогаешь игроку в ролевом чате"):
+        return LLMResult(text='["*улыбается* Привет!", "Кто ты такой?", "*молча кивает и садится рядом*"]')
+    if system.startswith("Ты — ") and "Это ролевой чат" in system:  # personal chat with a persona
+        if "#fail" in last:
+            raise LLMError("Тестовая ошибка модели")
+        name = system[5:].split(".")[0]
+        import random as _r
+        words = ["дождь", "чайник", "дверь", "свет", "ветер", "листья", "корица", "хлеб", "часы", "полночь", "море",
+                 "фонарь", "книга", "кошка", "мост", "звезда", "песок", "ключ", "письмо", "шарф", "трамвай", "снег"]
+        pick = _r.Random(n).sample(words, 7)
+        text = f"*{name} улыбается: {', '.join(pick[:4])}.* — Ответ №{n}: {' и '.join(pick[4:])}."
+        for piece in text.split(" "):
+            await asyncio.sleep(0.002)
+            if on_delta:
+                await on_delta(piece + " ")
+        return LLMResult(text=text, prompt_tokens=50, output_tokens=12, total_ms=5)
     if system.startswith("Ты кратко пересказываешь"):
         return LLMResult(text=f"Краткое содержание №{n}: герои беседовали.")
     m = re.search(r"Пиши за: Рассказчик(?:, ([^.]+))?\.", last)

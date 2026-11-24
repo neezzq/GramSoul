@@ -503,3 +503,150 @@ def image_prompt(title: str, world_rules: str, location: str, characters: list[C
     lines.append("Стиль: кинематографичная цифровая живопись, выразительный свет, вертикальный кадр. "
                  "Без текста, надписей, подписей и рамок на изображении.")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Personal chat with one character (persona): the model *is* the character
+# ---------------------------------------------------------------------------
+@dataclass
+class ChatPromptInput:
+    name: str
+    description: str
+    personality: str
+    backstory: str
+    user_name: str
+    setting: str
+    summary: str
+    history: list[HistoryItem]
+    mode: str  # reply | continue
+    num_ctx: int
+    num_predict: int
+    rich: bool = False
+
+
+CHAT_STYLE = (
+    "Как отвечать: на языке собеседника; действия и обстановку пиши в *звёздочках* (курсив), реплики — с тире; "
+    "3–8 предложений; сохраняй характер и факты диалога; двигай сцену вперёд и не повторяй уже сказанное. "
+    "Не подписывай ответ своим именем."
+)
+
+
+def _chat_system(inp: ChatPromptInput, lim: int, summary_lim: int) -> str:
+    lines = [
+        f"Ты — {inp.name}. Это ролевой чат: ты отвечаешь только за {inp.name} и окружающий мир "
+        f"и никогда не пишешь слова, мысли и поступки собеседника ({inp.user_name})."
+    ]
+    if inp.description.strip():
+        lines.append("О персонаже: " + _clip(inp.description, lim))
+    if inp.personality.strip():
+        lines.append("Характер: " + _clip(inp.personality, lim))
+    if inp.backstory.strip():
+        lines.append("Предыстория: " + _clip(inp.backstory, lim))
+    if inp.setting.strip():
+        lines.append("Мир и сцена: " + _clip(inp.setting, lim))
+    if inp.summary.strip() and summary_lim > 0:
+        lines.append("Что было раньше: " + _clip(inp.summary, summary_lim))
+    lines.append(CHAT_STYLE)
+    return "\n\n".join(lines)
+
+
+def build_chat(inp: ChatPromptInput) -> BuiltPrompt:
+    budget = int(max(800, (inp.num_ctx - inp.num_predict - 120) * CHARS_PER_TOKEN))
+    system = ""
+    for lim, summary_lim in (((2000, 3000),) if inp.rich else ()) + ((600, 800), (350, 500), (200, 300), (100, 200)):
+        system = _chat_system(inp, lim, summary_lim)
+        if len(system) <= int(budget * 0.55):
+            break
+    tail = (f"(Продолжи сцену от лица {inp.name}: что происходит дальше?)" if inp.mode == "continue" else "")
+    used = len(system) + len(tail) + 40
+    kept: list[HistoryItem] = []
+    for h in reversed(list(inp.history)):
+        n = len(h.text) + 8
+        if used + n > budget:
+            room = budget - used
+            if room > 200 and not kept:
+                kept.append(HistoryItem(h.seq, h.kind, h.speaker, "…" + h.text.strip()[-(room - 2):]))
+            break
+        kept.append(h)
+        used += n
+    kept.reverse()
+    messages: list[dict] = [{"role": "system", "content": system}]
+    for h in kept:
+        role = "user" if h.kind == "player" else "assistant"
+        text = h.text.strip()
+        if messages[-1]["role"] == role:
+            messages[-1]["content"] += "\n\n" + text
+        else:
+            messages.append({"role": role, "content": text})
+    if tail:
+        if messages[-1]["role"] == "user":
+            messages[-1]["content"] += "\n\n" + tail
+        else:
+            messages.append({"role": "user", "content": tail})
+    elif messages[-1]["role"] != "user":
+        messages.append({"role": "user", "content": f"(Продолжи от лица {inp.name}.)"})
+    stop = ["<|im_end|>", "<|endoftext|>", f"\n{inp.user_name}:", f"\n**{inp.user_name}"]
+    flat = "\n\n".join(f"<{m['role']}>\n{m['content']}" for m in messages)
+    return BuiltPrompt(messages=messages, stop=stop, text=flat)
+
+
+def parse_chat_output(raw: str, name: str, user_names: list[str], history: list[str] | None = None) -> list[ParsedLine]:
+    """One message from the character. Drops a leading "Name:" label and anything written for the player."""
+    text = (raw or "").replace("<|im_end|>", "").replace("<|endoftext|>", "")
+    keep: list[str] = []
+    for line in text.splitlines():
+        m = _LINE_RE.match(line.strip())
+        if m:
+            label = _norm(m.group(1))
+            if any(label == _norm(u) for u in user_names):
+                break  # the model started writing for the player
+            if label == _norm(name) or label == _norm(NARRATOR):
+                line = m.group(2)
+        keep.append(line)
+    out = _clean_text("\n".join(keep))
+    if sum(ch.isalpha() for ch in out) < 2:
+        return []
+    if history and _is_repeat(out, history):
+        return []
+    return [ParsedLine("character", name, out[:4000])]
+
+
+# ---------------------------------------------------------------------------
+# "Подсказать варианты реплики": three short options for the player's next turn
+# ---------------------------------------------------------------------------
+SUGGEST_SYSTEM = (
+    "Ты помогаешь игроку в ролевом чате. Предложи 3 разных коротких варианта его следующего хода — "
+    "каждый до 25 слов: действие в *звёздочках* и/или реплика. Варианты разные по настроению "
+    "(например: смелый, осторожный, неожиданный). Пиши на языке переписки, от лица игрока. "
+    "Ответ — только JSON-массив из трёх строк."
+)
+
+
+def suggest_messages(hero: str, others: list[str], history: list[HistoryItem]) -> list[dict]:
+    lines = "\n".join(_cut(_format_history_line(h), 300) for h in history[-12:])
+    user = (f"Игрок пишет за: {hero}. Другие персонажи: {', '.join(others) or '—'}.\n\n"
+            f"Последние сообщения:\n{lines}\n\nТри варианта следующего хода игрока ({hero}):")
+    return [{"role": "system", "content": SUGGEST_SYSTEM}, {"role": "user", "content": user}]
+
+
+def parse_suggestions(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    items: list[str] = []
+    m = re.search(r"\[.*\]", raw, re.S)
+    if m:
+        try:
+            data = json.loads(m.group(0))
+            items = [str(x) for x in data if isinstance(x, (str, int, float))]
+        except ValueError:
+            items = []
+    if not items:  # numbered / bulleted lines from small models
+        for line in raw.splitlines():
+            line = re.sub(r"^\s*(?:\d+[.)]|[-•*]\s)\s*", "", line).strip().strip('"«»').strip()
+            if len(line) > 2 and not line.startswith(("[", "]", "```")):
+                items.append(line)
+    out = []
+    for it in items:
+        it = " ".join(it.split()).strip().strip('"')
+        if it and it not in out:
+            out.append(it[:220])
+    return out[:3]

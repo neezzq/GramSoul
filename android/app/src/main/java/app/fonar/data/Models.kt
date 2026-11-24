@@ -189,6 +189,8 @@ data class SeatDto(
 @Serializable
 data class RoomDto(
     val id: String,
+    val kind: String = "story",
+    val title: String = "",
     val story: StoryDto,
     val my_role: String,
     val my_seat: Int,
@@ -210,6 +212,7 @@ data class RoomRes(val room: RoomDto)
 @Serializable
 data class RoomListItem(
     val id: String,
+    val kind: String = "story",
     val story_title: String,
     val cover_image_id: String? = null,
     val my_role: String,
@@ -240,6 +243,7 @@ data class MessageDto(
     val generation_id: String? = null,
     val image_id: String? = null,
     val hidden: Boolean = false,
+    val edited: Boolean = false,
     val client_id: String? = null,
     val created_at: Long = 0,
 )
@@ -348,7 +352,20 @@ data class PersonaDto(
     val backstory: String? = null,
     val personality: String? = null,
     val updated_at: Long = 0,
+    val chats: List<PersonaChatRef> = emptyList(),
 )
+
+@Serializable
+data class PersonaChatRef(val id: String, val updated_at: Long = 0)
+
+@Serializable
+data class EditReq(val text: String)
+
+@Serializable
+data class EditRes(val message: MessageDto)
+
+@Serializable
+data class SuggestRes(val suggestions: List<String> = emptyList())
 
 @Serializable
 data class PersonaReq(

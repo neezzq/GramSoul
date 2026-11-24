@@ -13,6 +13,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
@@ -159,6 +162,57 @@ class TwoPlayerUiTest {
             shot("05c_people_search")
             compose.onNodeWithTag("add_friend_${other.user.nick}").performClick()
             compose.waitTag("request_sent_${other.user.nick}")
+        }
+    }
+
+    /** Personal chat: greeting first, a streamed reply, three suggestions, edit by long press, regenerate. */
+    @Test
+    fun personalChatWithCharacter() {
+        ActivityScenario.launch(MainActivity::class.java).use {
+            register(uniq("Mira"))
+            compose.onNodeWithTag("tab_characters").performClick()
+            compose.waitTag("persona_card_Вера Солнцева")
+            compose.onNodeWithTag("persona_card_Вера Солнцева").performClick()
+            compose.waitTag("persona_chat_new")
+            compose.onNodeWithTag("persona_chat_new").performClick()
+            compose.waitTag("chat_input")
+            compose.waitText("Личный чат")
+            compose.waitText("стеклянную дверь")  // the character's first message
+            shot("30_chat_greeting")
+            compose.onNodeWithTag("chat_input").performTextInput("*снимаю шляпу* Добрый вечер")
+            compose.onNodeWithTag("send_button").performClick()
+            compose.waitText("Ответ №", 30_000)
+            compose.waitUntil(20_000) {
+                compose.onAllNodesWithTag("regenerate_button").fetchSemanticsNodes().firstOrNull()
+                    ?.config?.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Disabled) == null
+            }
+            // three options for my next turn; picking one fills the input
+            compose.onNodeWithTag("suggest_button").performClick()
+            compose.waitTag("suggestion_2")
+            shot("31_suggestions")
+            compose.onNodeWithTag("suggestion_1").performClick()
+            compose.waitText("Кто ты такой?")
+            // fix my own line by a long press
+            compose.onAllNodesWithText("Добрый вечер", substring = true, useUnmergedTree = true)[0].performTouchInput { longClick() }
+            compose.waitTag("edit_panel")
+            compose.onNodeWithTag("edit_input").performTextReplacement("*снимаю шляпу* Доброй ночи")
+            compose.onNodeWithTag("edit_save").performClick()
+            compose.waitText("Доброй ночи")
+            compose.waitText("изменено")
+            shot("32_edited")
+            // regenerate the character's reply
+            val before = compose.onAllNodesWithText("Ответ №", substring = true, useUnmergedTree = true).fetchSemanticsNodes()
+                .map { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString() }
+            compose.onNodeWithTag("regenerate_button").performClick()
+            compose.waitUntil(30_000) {
+                val now = compose.onAllNodesWithText("Ответ №", substring = true, useUnmergedTree = true).fetchSemanticsNodes()
+                    .map { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString() }
+                now.isNotEmpty() && now != before
+            }
+            // the avatar opens the character's page
+            compose.onAllNodesWithTag("avatar_Вера Солнцева", useUnmergedTree = true)[0].performClick()
+            compose.waitTag("persona_view")
+            compose.waitTag("persona_chat_continue")
         }
     }
 

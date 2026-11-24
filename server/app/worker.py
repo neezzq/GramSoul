@@ -13,7 +13,7 @@ from .common import hub, new_id
 from .config import settings
 from .db import Database, now_ms
 from .images import process_image, save_image
-from .rooms import _append, _bump, _notify_room, seats_of
+from .rooms import _append, _bump, _notify_room, room_personas, seats_of
 
 log = logging.getLogger("fonar.worker")
 
@@ -161,6 +161,32 @@ class Worker:
         )
         return inp, npcs, seats
 
+    def _history(self, room, limit: int, exclude_generation: int | None) -> list[P.HistoryItem]:
+        params = [room["id"], room["summary_upto_seq"]]
+        excl = ""
+        if exclude_generation is not None:
+            excl = " AND (generation_id IS NULL OR generation_id<>?)"
+            params.append(exclude_generation)
+        rows = self.db.all(
+            f"SELECT * FROM messages WHERE room_id=? AND hidden=0 AND seq>? AND kind<>'system' AND image_id IS NULL{excl} "
+            "ORDER BY seq DESC LIMIT ?", (*params, limit))
+        return [P.HistoryItem(r["seq"], r["kind"], r["speaker_name"] or P.NARRATOR, r["text"]) for r in reversed(rows)]
+
+    def _load_chat_input(self, room, mode: str, exclude_generation: int | None):
+        lim = self._limits(room)
+        ps = room_personas(self.db, room)
+        if not ps:
+            return None, None
+        p = ps[0]
+        owner = self.db.one("SELECT nick FROM users WHERE id=?", (room["owner_id"],))
+        inp = P.ChatPromptInput(
+            name=p["name"] or "Персонаж", description=p["description"], personality=p["personality"],
+            backstory=p["backstory"], user_name=owner["nick"] if owner else "Игрок", setting=room["setting"],
+            summary=room["summary"], history=self._history(room, lim["recent"], exclude_generation), mode=mode,
+            num_ctx=lim["num_ctx"], num_predict=lim["num_predict"], rich=lim["rich"],
+        )
+        return inp, p
+
     async def _run_generation(self, job) -> None:
         db = self.db
         room = db.one("SELECT * FROM rooms WHERE id=?", (job["room_id"],))
@@ -174,18 +200,31 @@ class Worker:
                 self._finish_failed(job, "Последний ответ уже изменился — перегенерация отменена.")
                 return
         mode = "continue" if job["kind"] == "continue" else "reply"
-        inp, npcs, seats = self._load_prompt_input(room, mode, replaces if job["kind"] == "regenerate" else None)
-        built = P.build(inp)
+        exclude = replaces if job["kind"] == "regenerate" else None
+        chat = room["kind"] == "chat"
+        persona = None
+        if chat:
+            inp, persona = self._load_chat_input(room, mode, exclude)
+            if inp is None:
+                self._finish_failed(job, "Персонаж этого чата удалён автором.")
+                return
+            built = P.build_chat(inp)
+            npcs, seats = [], []
+            versions = json.dumps({persona["public_id"]: persona["version"]})
+        else:
+            inp, npcs, seats = self._load_prompt_input(room, mode, exclude)
+            built = P.build(inp)
+            versions = P.card_versions_json(npcs, seats)
         lim = self._limits(room)
         provider = lim["provider"]
         with db.tx():
             db.run("UPDATE generations SET status='running', started_at=?, model=?, provider=?, prompt=?, card_versions=? WHERE id=?",
-                   (now_ms(), lim["model"], provider, built.text, P.card_versions_json(npcs, seats), job["id"]))
+                   (now_ms(), lim["model"], provider, built.text, versions, job["id"]))
             _bump(db, room["id"])
         hub.partial_start(room["id"], job["public_id"])
         _notify_room(room["id"])
         npc_names = [c.name for c in npcs]
-        hero_names = [s.hero_name for s in seats]
+        hero_names = [inp.user_name] if chat else [s.hero_name for s in seats]
         recent = [r["text"] for r in db.all(
             "SELECT text FROM messages WHERE room_id=? AND hidden=0 ORDER BY seq DESC LIMIT 30", (room["id"],))]
         if job["kind"] == "regenerate" and replaces:
@@ -193,7 +232,8 @@ class Worker:
                 "SELECT text FROM messages WHERE room_id=? AND hidden=0 AND (generation_id IS NULL OR generation_id<>?) "
                 "ORDER BY seq DESC LIMIT 30", (room["id"], replaces))]
         # the scene-state/instruction turn is also "already said": an echo of it is not a reaction
-        recent = recent + [l for l in built.messages[-1]["content"].splitlines() if l.strip()]
+        if not chat:
+            recent = recent + [l for l in built.messages[-1]["content"].splitlines() if l.strip()]
         parsed: list[P.ParsedLine] = []
         result = None
         # one automatic second attempt if the small model only repeated the scene or produced nothing usable
@@ -211,7 +251,7 @@ class Worker:
             prefill = ""
             if attempt:
                 messages[-1]["content"] += "\nНе повторяй уже сказанное — придумай новую реакцию, новые детали и действия."
-                if provider == "local":  # assistant prefill is reliable only with the local model
+                if provider == "local" and not chat:  # assistant prefill is reliable only with the local model
                     prefill = P.NARRATOR + ":"
                     messages.append({"role": "assistant", "content": prefill})
                     extra = {"repeat_last_n": -1, "repeat_penalty": max(settings.llm_repeat_penalty, 1.2)}
@@ -232,7 +272,10 @@ class Worker:
                 log.exception("generation failed")
                 self._finish_failed(job, f"Ошибка генерации: {type(e).__name__}")
                 return
-            parsed = P.parse_output(result.text, npc_names, hero_names, history=recent, facts=inp.facts)
+            if chat:
+                parsed = P.parse_chat_output(result.text, inp.name, hero_names, history=recent)
+            else:
+                parsed = P.parse_output(result.text, npc_names, hero_names, history=recent, facts=inp.facts)
             if parsed:
                 break
         hub.partial_clear(room["id"])
@@ -248,6 +291,10 @@ class Worker:
                 db.run("UPDATE messages SET hidden=1, rev=? WHERE room_id=? AND generation_id=?", (rev, room["id"], replaces))
                 db.run("UPDATE scene_facts SET hidden=1 WHERE room_id=? AND generation_id=?", (room["id"], replaces))
             for p in parsed:
+                if chat:
+                    _append(db, room["id"], "character", None, None, p.name, p.text, generation_id=job["id"],
+                            persona_id=persona["id"])
+                    continue
                 if p.kind == "narrator":
                     mid = _append(db, room["id"], "narrator", None, None, P.NARRATOR, p.text, generation_id=job["id"])
                 else:
@@ -273,12 +320,19 @@ class Worker:
         room = db.one("SELECT * FROM rooms WHERE id=?", (job["room_id"],))
         if room is None:
             return
-        story = db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],))
-        inp, npcs, seats = self._load_prompt_input(room, "reply", None)
-        present = set(P.present_names(inp))
-        in_frame = [c for c in npcs if c.name in present] + [s.hero for s in seats if s.hero]
-        prompt = P.image_prompt(story["title"], story["world_rules"], room["scene_location"], in_frame,
-                                inp.history, job["user_prompt"])
+        if room["story_id"] is None:
+            cinp, persona = self._load_chat_input(room, "reply", None)
+            in_frame = [P.Card(id=persona["id"], public_id=persona["public_id"], role="npc", name=persona["name"],
+                               appearance=persona["description"])] if persona else []
+            prompt = P.image_prompt(room["title"], room["setting"], room["scene_location"], in_frame,
+                                    cinp.history if cinp else [], job["user_prompt"])
+        else:
+            story = db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],))
+            inp, npcs, seats = self._load_prompt_input(room, "reply", None)
+            present = set(P.present_names(inp))
+            in_frame = [c for c in npcs if c.name in present] + [s.hero for s in seats if s.hero]
+            prompt = P.image_prompt(story["title"], story["world_rules"], room["scene_location"], in_frame,
+                                    inp.history, job["user_prompt"])
         with db.tx():
             db.run("UPDATE image_jobs SET status='running', model=?, prompt=? WHERE id=?",
                    (settings.cloud_image_model, prompt, job["id"]))

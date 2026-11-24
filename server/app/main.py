@@ -510,7 +510,17 @@ async def fill_persona(body: PS.FillIn, user: User = Depends(current_user)):
 
 @app.get("/v1/personas/{pid}")
 async def get_persona(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
-    return PS.get(d, user, pid)
+    out = PS.get(d, user, pid)
+    row = d.one("SELECT id FROM personas WHERE public_id=?", (pid,))
+    out["persona"]["chats"] = R.chats_with_persona(d, user, row["id"])
+    return out
+
+
+@app.post("/v1/personas/{pid}/chats", status_code=201)
+async def start_chat(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    """A new personal chat with this character; its first message is always the greeting."""
+    rate(f"room:{user.id}", 60, 3600)
+    return {"room": R.create_chat(d, user, PS.visible_persona(d, user, pid))}
 
 
 @app.put("/v1/personas/{pid}")
@@ -657,6 +667,18 @@ async def sync(room_id: str, since: int = 0, pv: int = -1, wait: int = 0, user: 
     payload = R.sync_payload(d, user, room, since)
     payload["pv"] = partial_v()
     return payload
+
+
+@app.patch("/v1/rooms/{room_id}/messages/{mid}")
+async def edit_message(room_id: str, mid: str, body: R.EditIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"edit:{user.id}", settings.rl_messages_per_min, 60)
+    return R.edit_message(d, user, room_id, mid, body)
+
+
+@app.post("/v1/rooms/{room_id}/suggest")
+async def suggest(room_id: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"suggest:{user.id}", 8, 60, "Слишком часто. Подожди немного.")
+    return await R.suggest_replies(d, user, room_id)
 
 
 @app.post("/v1/rooms/{room_id}/messages", status_code=201)

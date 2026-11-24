@@ -2,6 +2,9 @@ package app.fonar.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -116,6 +119,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
     var showScene by remember { mutableStateOf(false) }
     var showAiMode by remember { mutableStateOf(false) }
     var showPhoto by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<MessageDto?>(null) }
     var fullImage by remember { mutableStateOf<String?>(null) }
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     var confirmLeave by remember { mutableStateOf(false) }
@@ -149,8 +153,13 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
     }
 
     fun openCard(charId: String?) {
-        if (charId != null) nav.navigate(Routes.card(roomId, charId))
+        if (charId == null) return
+        // in a personal chat the character is a persona with its own page
+        if (room?.kind == "chat") nav.navigate(Routes.persona(charId)) else nav.navigate(Routes.card(roomId, charId))
     }
+
+    fun canEdit(m: MessageDto): Boolean = room != null && m.image_id == null && m.kind != "system" &&
+        ((m.kind == "player" && m.user_id == me) || (m.kind != "player" && room.my_role == "owner"))
 
     Scaffold(
         topBar = {
@@ -158,9 +167,9 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                 navigationIcon = { IconButton(onClick = { nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
                 title = {
                     Column {
-                        Text(room?.story?.title ?: "Сцена", maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        Text(room?.title?.ifBlank { null } ?: room?.story?.title ?: "Сцена", maxLines = 1, overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Serif))
-                        if (room != null) Text(seatLine(room), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        if (room != null) Text(if (room.kind == "chat") "Личный чат" else seatLine(room), maxLines = 1, overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.labelSmall, color = Fonar.Sea, modifier = Modifier.testTag("seat_line"))
                     }
                 },
@@ -172,7 +181,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                                 if (cloud) "Облачный ИИ" else "Локальный ИИ", tint = if (cloud) Fonar.Lamp else Fonar.Sea)
                         }
                     }
-                    if (room != null && room.my_role == "owner" && room.seats.getOrNull(1)?.user == null) {
+                    if (room != null && room.kind == "story" && room.my_role == "owner" && room.seats.getOrNull(1)?.user == null) {
                         IconButton(onClick = { vm.loadFriends(); showInvite = true }, modifier = Modifier.testTag("chat_invite")) {
                             Icon(Icons.Outlined.PersonAdd, "Играть с другом", tint = Fonar.Lamp)
                         }
@@ -186,7 +195,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                             DropdownMenuItem(text = { Text("Что видит ИИ") }, onClick = { menu = false; vm.loadLastPrompt() },
                                 modifier = Modifier.exposeTags().testTag("menu_prompt"))
                             DropdownMenuItem(
-                                text = { Text(if (room?.my_role == "owner") "Удалить сцену" else "Выйти из сцены", color = Fonar.Error) },
+                                text = { Text(if (room?.kind == "chat") "Удалить чат" else if (room?.my_role == "owner") "Удалить сцену" else "Выйти из сцены", color = Fonar.Error) },
                                 onClick = { menu = false; confirmLeave = true },
                             )
                         }
@@ -224,7 +233,8 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                         if (m.image_id != null) {
                             PhotoMessage(m, graph.api.roomImageUrl(roomId, m.image_id)) { fullImage = it }
                         } else {
-                            MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard)
+                            MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard,
+                                onLongPress = if (canEdit(m)) ({ editing = m; showPhoto = false }) else null)
                         }
                     }
                     items(s.pending, key = { "p" + it.clientId }) { p -> PendingItem(p, vm) }
@@ -244,7 +254,11 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                     vm = vm,
                     imagesAvailable = room.images_available,
                     photoOpen = showPhoto,
-                    onPhoto = { showPhoto = !showPhoto },
+                    onPhoto = { showPhoto = !showPhoto; editing = null },
+                    editing = editing,
+                    onEditSave = { text -> editing?.let { vm.editMessage(it, text) }; editing = null; focusManager.clearFocus() },
+                    onEditCancel = { editing = null },
+                    onPickSuggestion = { text -> input = TextFieldValue(text, TextRange(text.length)); vm.clearSuggestions() },
                     onPhotoSubmit = { what -> showPhoto = false; focusManager.clearFocus(); vm.requestPhoto(what) },
                 )
             }
@@ -343,13 +357,14 @@ private fun MessageItem(
     roomId: String,
     imageUrl: (String, String) -> String,
     openCard: (String?) -> Unit,
+    onLongPress: (() -> Unit)? = null,
 ) {
     when (m.kind) {
         "system" -> Text(
             m.text, color = Fonar.Muted, style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
         )
-        "narrator" -> NarratorBlock(m.text)
+        "narrator" -> NarratorBlock(m.text, m.edited, onLongPress)
         "character" -> {
             val c = characterById(room, m.character_id)
             val url = c?.avatar_image_id?.let { imageUrl(roomId, it) }
@@ -360,7 +375,7 @@ private fun MessageItem(
                     Text(m.speaker_name, color = Fonar.Lamp, fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.clickable { openCard(c?.id) }.padding(bottom = 3.dp).testTag("name_${m.speaker_name}"))
-                    Bubble(m.text, Fonar.CharBubble, RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp))
+                    Bubble(m.text, Fonar.CharBubble, RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), m.edited, onLongPress)
                 }
             }
         }
@@ -388,6 +403,7 @@ private fun MessageItem(
                     Bubble(
                         m.text, if (mine) Fonar.MyBubble else Fonar.FriendBubble,
                         if (mine) RoundedCornerShape(18.dp, 4.dp, 18.dp, 18.dp) else RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp),
+                        m.edited, onLongPress,
                     )
                 }
                 if (mine) {
@@ -399,19 +415,32 @@ private fun MessageItem(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun Modifier.longPress(onLongPress: (() -> Unit)?): Modifier =
+    if (onLongPress == null) this else this.combinedClickable(onClick = {}, onLongClick = onLongPress)
+
 @Composable
-private fun Bubble(text: String, color: androidx.compose.ui.graphics.Color, shape: RoundedCornerShape) {
-    Surface(color = color, shape = shape) {
-        Text(actionText(text), style = MaterialTheme.typography.bodyLarge, color = Fonar.Text,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+private fun Bubble(
+    text: String,
+    color: androidx.compose.ui.graphics.Color,
+    shape: RoundedCornerShape,
+    edited: Boolean = false,
+    onLongPress: (() -> Unit)? = null,
+) {
+    Surface(color = color, shape = shape, modifier = Modifier.clip(shape).longPress(onLongPress)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(actionText(text), style = MaterialTheme.typography.bodyLarge, color = Fonar.Text)
+            if (edited) Text("изменено", style = MaterialTheme.typography.labelSmall, color = Fonar.Faint,
+                modifier = Modifier.padding(top = 2.dp))
+        }
     }
 }
 
 @Composable
-private fun NarratorBlock(text: String) {
+private fun NarratorBlock(text: String, edited: Boolean = false, onLongPress: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(12.dp)).background(Fonar.NarratorBg)
-            .testTag("msg_narrator"),
+            .longPress(onLongPress).testTag("msg_narrator"),
     ) {
         Box(Modifier.width(3.dp).heightIn(min = 40.dp).background(Fonar.Lamp.copy(alpha = 0.55f)))
         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
@@ -492,6 +521,10 @@ private fun Composer(
     photoOpen: Boolean,
     onPhoto: () -> Unit,
     onPhotoSubmit: (String) -> Unit,
+    editing: MessageDto? = null,
+    onEditSave: (String) -> Unit = {},
+    onEditCancel: () -> Unit = {},
+    onPickSuggestion: (String) -> Unit = {},
 ) {
     val g = s.generation
     val active = g != null && (g.status == "queued" || g.status == "running")
@@ -499,7 +532,8 @@ private fun Composer(
     val regenerating = active && g?.kind == "regenerate"
     Surface(color = Fonar.Surface, tonalElevation = 2.dp) {
         Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 8.dp)) {
-            if (photoOpen) PhotoPanel(onSubmit = onPhotoSubmit, onClose = onPhoto)
+            if (editing != null) EditPanel(editing, onSave = onEditSave, onCancel = onEditCancel)
+            else if (photoOpen) PhotoPanel(onSubmit = onPhotoSubmit, onClose = onPhoto)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AssistChip(
                     onClick = { vm.continueScene() },
@@ -529,6 +563,19 @@ private fun Composer(
                     modifier = Modifier.testTag("action_button"),
                 )
             }
+            if (s.suggestions.isNotEmpty()) {
+                Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    s.suggestions.forEachIndexed { i, sug ->
+                        Surface(
+                            onClick = { onPickSuggestion(sug) }, color = Fonar.SurfaceHigh, shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().testTag("suggestion_$i"),
+                        ) {
+                            Text(actionText(sug), style = MaterialTheme.typography.bodyMedium, maxLines = 3,
+                                overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+                        }
+                    }
+                }
+            }
             Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
                 if (imagesAvailable) {
                     val photoBusy = s.imageJob?.status == "queued" || s.imageJob?.status == "running"
@@ -543,6 +590,13 @@ private fun Composer(
                     onValueChange = { if (it.text.length <= 2000) onInput(it) },
                     placeholder = {
                         Text(if (regenerating) "Идёт перегенерация…" else "*действие* и реплика…", color = Fonar.Faint)
+                    },
+                    trailingIcon = {
+                        // "подсказать варианты реплики": always visible, unlike the chips that scroll
+                        if (s.suggestBusy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                        else IconButton(onClick = { vm.suggest() }, enabled = !s.actionBusy, modifier = Modifier.testTag("suggest_button")) {
+                            Icon(Icons.Outlined.Lightbulb, "Варианты реплики", tint = Fonar.Lamp.copy(alpha = 0.85f))
+                        }
                     },
                     minLines = 1,
                     maxLines = if (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 600) 3 else 5,
@@ -658,6 +712,32 @@ private fun ModeOption(
 
 
 /** Inline (no extra window) request for a scene photo, shown above the message input. */
+@Composable
+private fun EditPanel(m: MessageDto, onSave: (String) -> Unit, onCancel: () -> Unit) {
+    var text by remember(m.id) { mutableStateOf(m.text) }
+    Surface(color = Fonar.SurfaceHigh, shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("edit_panel")) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Edit, null, tint = Fonar.Lamp, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (m.kind == "player") "Изменить своё сообщение" else "Изменить ответ ИИ",
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                TextButton(onClick = onCancel, modifier = Modifier.testTag("edit_cancel")) { Text("Отмена", color = Fonar.Muted) }
+            }
+            OutlinedTextField(
+                value = text, onValueChange = { if (it.length <= 5000) text = it },
+                maxLines = 6,
+                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Night, unfocusedContainerColor = Fonar.Night),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("edit_input"),
+            )
+            Button(onClick = { onSave(text) }, enabled = text.isNotBlank() && text.trim() != m.text,
+                modifier = Modifier.align(Alignment.End).padding(top = 8.dp).testTag("edit_save")) { Text("Сохранить") }
+        }
+    }
+}
+
 @Composable
 private fun PhotoPanel(onSubmit: (String) -> Unit, onClose: () -> Unit) {
     var what by rememberSaveable { mutableStateOf("") }

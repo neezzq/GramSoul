@@ -104,15 +104,19 @@ CREATE TABLE IF NOT EXISTS start_messages(
 CREATE TABLE IF NOT EXISTS rooms(
   id INTEGER PRIMARY KEY,
   public_id TEXT NOT NULL UNIQUE,
-  story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL DEFAULT 'story' CHECK(kind IN ('story','chat','group')),
+  story_id INTEGER REFERENCES stories(id) ON DELETE CASCADE,
   owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   guest_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  title TEXT NOT NULL DEFAULT '',
+  setting TEXT NOT NULL DEFAULT '',
   rev INTEGER NOT NULL DEFAULT 0,
   meta_rev INTEGER NOT NULL DEFAULT 0,
   next_seq INTEGER NOT NULL DEFAULT 1,
   scene_location TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL DEFAULT '',
   summary_upto_seq INTEGER NOT NULL DEFAULT 0,
+  ai_mode TEXT NOT NULL DEFAULT 'local',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -233,6 +237,13 @@ CREATE TABLE IF NOT EXISTS personas(
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS personas_author ON personas(author_id);
+CREATE TABLE IF NOT EXISTS room_personas(
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  persona_id INTEGER NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(room_id, persona_id)
+);
+CREATE INDEX IF NOT EXISTS room_personas_persona ON room_personas(persona_id);
 """
 
 # columns added after the first release (ALTER TABLE keeps existing data)
@@ -242,7 +253,44 @@ MIGRATIONS = [
     ("generations", "provider", "ALTER TABLE generations ADD COLUMN provider TEXT"),
     ("users", "avatar_image_id", "ALTER TABLE users ADD COLUMN avatar_image_id TEXT REFERENCES images(id) ON DELETE SET NULL"),
     ("users", "about", "ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''"),
+    ("messages", "persona_id", "ALTER TABLE messages ADD COLUMN persona_id INTEGER REFERENCES personas(id) ON DELETE SET NULL"),
+    ("messages", "edited_at", "ALTER TABLE messages ADD COLUMN edited_at INTEGER"),
 ]
+
+
+def _rooms_table_sql(name: str) -> str:
+    start = SCHEMA.index("CREATE TABLE IF NOT EXISTS rooms(")
+    end = SCHEMA.index(");", start) + 2
+    return SCHEMA[start:end].replace("CREATE TABLE IF NOT EXISTS rooms(", f"CREATE TABLE {name}(")
+
+
+def _rebuild_rooms_if_needed(conn: sqlite3.Connection) -> bool:
+    """Rooms of the first releases had story_id NOT NULL; personal chats have no story.
+    SQLite can not drop NOT NULL, so the table is rebuilt once (the documented 12-step way):
+    foreign keys OFF (otherwise DROP TABLE would cascade-delete every message), copy, swap."""
+    info = conn.execute("PRAGMA table_info(rooms)").fetchall()
+    if not info or not any(r[1] == "story_id" and r[3] == 1 for r in info):
+        return False
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(_rooms_table_sql("rooms_v2"))
+            old_cols = [r[1] for r in info]
+            new_cols = [r[1] for r in conn.execute("PRAGMA table_info(rooms_v2)").fetchall()]
+            common = ",".join(c for c in old_cols if c in new_cols)
+            conn.execute(f"INSERT INTO rooms_v2({common}) SELECT {common} FROM rooms")
+            conn.execute("DROP TABLE rooms")
+            conn.execute("ALTER TABLE rooms_v2 RENAME TO rooms")
+            if conn.execute("PRAGMA foreign_key_check").fetchall():
+                raise RuntimeError("foreign key check failed after rebuilding rooms")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.execute("PRAGMA foreign_keys=ON")
+    return True
 
 
 def now_ms() -> int:
@@ -260,6 +308,7 @@ class Database:
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
+        _rebuild_rooms_if_needed(self.conn)
         self.conn.executescript(SCHEMA)
         for table, column, sql in MIGRATIONS:
             cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}

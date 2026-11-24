@@ -36,6 +36,8 @@ data class ChatState(
     val actionBusy: Boolean = false,
     val friends: FriendsRes? = null,
     val lastPrompt: LastPromptRes? = null,
+    val suggestions: List<String> = emptyList(),
+    val suggestBusy: Boolean = false,
 )
 
 class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
@@ -180,6 +182,29 @@ class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
         val res = g.api.photo(roomId, id, prompt.trim())
         _state.update { it.copy(imageJob = res.image_job ?: it.imageJob) }
     }
+
+    /** Fix a line; the server sends the new text to everyone in the room through sync. */
+    fun editMessage(m: MessageDto, text: String) = action {
+        val res = g.api.editMessage(roomId, m.id, text.trim())
+        all[res.message.id] = res.message
+        _state.update { it.copy(messages = all.values.filter { x -> !x.hidden }.sortedBy { x -> x.seq }) }
+    }
+
+    /** Three short options for the next turn; picking one only fills the input. */
+    fun suggest() {
+        if (_state.value.suggestBusy) return
+        _state.update { it.copy(suggestBusy = true, suggestions = emptyList()) }
+        viewModelScope.launch {
+            try {
+                val r = g.api.suggest(roomId)
+                _state.update { it.copy(suggestBusy = false, suggestions = r.suggestions) }
+            } catch (e: Exception) {
+                _state.update { it.copy(suggestBusy = false, toast = (e as? ApiException)?.message ?: "Нет связи с сервером") }
+            }
+        }
+    }
+
+    fun clearSuggestions() = _state.update { it.copy(suggestions = emptyList()) }
 
     fun loadFriends() {
         viewModelScope.launch { runCatching { g.api.friends() }.onSuccess { f -> _state.update { it.copy(friends = f) } } }

@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from . import prompt as P
+from . import llm, prompt as P
 from .common import ApiError, User, hub, new_id, not_found
 from .config import settings
 from .db import Database, now_ms
@@ -40,6 +40,10 @@ class RoomSettingsIn(BaseModel):
 class PhotoIn(BaseModel):
     client_id: str = Field(min_length=8, max_length=64)
     prompt: str = Field(default="", max_length=300)
+
+
+class EditIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +79,9 @@ def heroes_of(db: Database, story_id: int) -> list:
 
 
 def seats_of(db: Database, room) -> list[dict]:
+    if room["story_id"] is None:  # personal chat: the player is just themself
+        u = _user_pub(db, room["owner_id"])
+        return [{"index": 0, "user": u, "hero_character_id": None, "hero_name": u["nick"] if u else "Игрок"}]
     heroes = heroes_of(db, room["story_id"])
     seats = []
     for idx, uid in enumerate([room["owner_id"], room["guest_id"]]):
@@ -89,13 +96,37 @@ def seats_of(db: Database, room) -> list[dict]:
     return seats
 
 
+def room_personas(db: Database, room) -> list:
+    return db.all("SELECT p.* FROM room_personas rp JOIN personas p ON p.id=rp.persona_id WHERE rp.room_id=? "
+                  "ORDER BY rp.position", (room["id"],))
+
+
+def _persona_as_character(p) -> dict:
+    """A persona in the shape of a story character, so the chat screen shows it the same way.
+    Backstory / personality stay on the server."""
+    return {"id": p["public_id"], "role": "npc", "position": 0, "name": p["name"], "avatar_image_id": p["avatar_image_id"],
+            "appearance": p["description"], "version": p["version"], "updated_at": p["updated_at"]}
+
+
+def _chat_story(db: Database, room) -> dict:
+    ps = room_personas(db, room)
+    return {"id": None, "title": room["title"], "description": ps[0]["description"] if ps else "",
+            "intro": "", "world_rules": room["setting"], "start_scene": "", "cover_image_id": None, "is_demo": False,
+            "version": 1, "updated_at": room["updated_at"], "characters": [_persona_as_character(p) for p in ps],
+            "start_messages": []}
+
+
 def room_detail(db: Database, user: User, room) -> dict:
-    story = db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],))
-    sd = story_dict(db, story, full=True)
+    if room["story_id"] is None:
+        sd = _chat_story(db, room)
+    else:
+        sd = story_dict(db, db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],)), full=True)
     invite = db.one("SELECT ri.*, u.public_id upid, u.nick FROM room_invites ri JOIN users u ON u.id=ri.to_user "
                     "WHERE ri.room_id=? ORDER BY ri.updated_at DESC LIMIT 1", (room["id"],))
     return {
         "id": room["public_id"],
+        "kind": room["kind"],
+        "title": room["title"] or sd["title"],
         "story": sd,
         "my_role": "owner" if room["owner_id"] == user.id else "guest",
         "my_seat": 0 if room["owner_id"] == user.id else 1,
@@ -166,7 +197,10 @@ def delete_room(db: Database, user: User, room_pid: str) -> None:
 
 def list_rooms(db: Database, user: User) -> list[dict]:
     rows = db.all(
-        "SELECT r.*, s.title, s.cover_image_id FROM rooms r JOIN stories s ON s.id=r.story_id "
+        "SELECT r.*, COALESCE(s.title, r.title) AS story_title_, s.cover_image_id, "
+        "(SELECT p.avatar_image_id FROM room_personas rp JOIN personas p ON p.id=rp.persona_id "
+        " WHERE rp.room_id=r.id ORDER BY rp.position LIMIT 1) AS persona_avatar "
+        "FROM rooms r LEFT JOIN stories s ON s.id=r.story_id "
         "WHERE r.owner_id=? OR r.guest_id=? ORDER BY r.updated_at DESC LIMIT 100",
         (user.id, user.id),
     )
@@ -179,8 +213,9 @@ def list_rooms(db: Database, user: User) -> list[dict]:
         partner_id = r["guest_id"] if r["owner_id"] == user.id else r["owner_id"]
         out.append({
             "id": r["public_id"],
-            "story_title": r["title"],
-            "cover_image_id": r["cover_image_id"],
+            "kind": r["kind"],
+            "story_title": r["story_title_"],
+            "cover_image_id": r["cover_image_id"] or r["persona_avatar"],
             "my_role": "owner" if r["owner_id"] == user.id else "guest",
             "partner": _user_pub(db, partner_id),
             "last_message": (f"{last['speaker_name']}: {last['text']}" if last and last["speaker_name"] else
@@ -233,8 +268,8 @@ def invite(db: Database, user: User, room_pid: str, target_pid: str) -> dict:
 
 def list_invites(db: Database, user: User) -> list[dict]:
     rows = db.all(
-        "SELECT ri.public_id, ri.status, ri.created_at, r.public_id rpid, s.title, u.public_id upid, u.nick "
-        "FROM room_invites ri JOIN rooms r ON r.id=ri.room_id JOIN stories s ON s.id=r.story_id "
+        "SELECT ri.public_id, ri.status, ri.created_at, r.public_id rpid, COALESCE(s.title, r.title) title, u.public_id upid, u.nick "
+        "FROM room_invites ri JOIN rooms r ON r.id=ri.room_id LEFT JOIN stories s ON s.id=r.story_id "
         "JOIN users u ON u.id=ri.from_user WHERE ri.to_user=? AND ri.status='pending' ORDER BY ri.updated_at DESC",
         (user.id,),
     )
@@ -273,24 +308,24 @@ def answer_invite(db: Database, user: User, invite_pid: str, accept: bool) -> di
 # messages
 # ---------------------------------------------------------------------------
 def _insert_msg(db, room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id,
-                image_id=None) -> int:
+                image_id=None, persona_id=None) -> int:
     cur = db.run(
-        "INSERT INTO messages(public_id, room_id, seq, rev, kind, user_id, character_id, speaker_name, text, client_id, "
-        "generation_id, image_id, hidden, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)",
-        (new_id(), room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id, image_id,
-         now_ms()),
+        "INSERT INTO messages(public_id, room_id, seq, rev, kind, user_id, character_id, persona_id, speaker_name, text, "
+        "client_id, generation_id, image_id, hidden, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?)",
+        (new_id(), room_id, seq, rev, kind, user_id, character_id, persona_id, speaker, text, client_id, generation_id,
+         image_id, now_ms()),
     )
     return cur.lastrowid
 
 
 def _append(db, room_id, kind, user_id, character_id, speaker, text, client_id=None, generation_id=None,
-            image_id=None) -> int:
+            image_id=None, persona_id=None) -> int:
     """Append a message at the end of the room in server order. Inside a transaction."""
     rev = _bump(db, room_id)
     seq = db.one("SELECT next_seq FROM rooms WHERE id=?", (room_id,))["next_seq"]
     db.run("UPDATE rooms SET next_seq=next_seq+1 WHERE id=?", (room_id,))
     return _insert_msg(db, room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id,
-                       image_id)
+                       image_id, persona_id)
 
 
 def _insert_system(db, room_id, text) -> int:
@@ -313,6 +348,12 @@ def message_dict(db: Database, m, viewer: User | None = None, user_cache: dict |
             c = db.one("SELECT public_id FROM characters WHERE id=?", (m["character_id"],))
             char_cache[m["character_id"]] = c["public_id"] if c else None
         cpid = char_cache[m["character_id"]]
+    elif m["persona_id"] is not None:  # personal chat: the persona plays the "character" part
+        key = ("p", m["persona_id"])
+        if key not in char_cache:
+            p = db.one("SELECT public_id FROM personas WHERE id=?", (m["persona_id"],))
+            char_cache[key] = p["public_id"] if p else None
+        cpid = char_cache[key]
     gpid = None
     if m["generation_id"] is not None:
         g = db.one("SELECT public_id FROM generations WHERE id=?", (m["generation_id"],))
@@ -329,6 +370,7 @@ def message_dict(db: Database, m, viewer: User | None = None, user_cache: dict |
         "generation_id": gpid,
         "image_id": m["image_id"],
         "hidden": bool(m["hidden"]),
+        "edited": m["edited_at"] is not None,
         "client_id": m["client_id"] if (viewer and m["user_id"] == viewer.id) else None,
         "created_at": m["created_at"],
     }
@@ -490,9 +532,13 @@ def last_prompt(db: Database, user: User, room_pid: str) -> dict:
 
 def room_image_allowed(db: Database, user: User, room_pid: str, image_id: str) -> bool:
     room = member_room(db, user, room_pid)
-    if db.one("SELECT 1 FROM stories WHERE id=? AND cover_image_id=?", (room["story_id"], image_id)):
-        return True
-    if db.one("SELECT 1 FROM characters WHERE story_id=? AND avatar_image_id=?", (room["story_id"], image_id)):
+    if room["story_id"] is not None:
+        if db.one("SELECT 1 FROM stories WHERE id=? AND cover_image_id=?", (room["story_id"], image_id)):
+            return True
+        if db.one("SELECT 1 FROM characters WHERE story_id=? AND avatar_image_id=?", (room["story_id"], image_id)):
+            return True
+    if db.one("SELECT 1 FROM room_personas rp JOIN personas p ON p.id=rp.persona_id WHERE rp.room_id=? AND p.avatar_image_id=?",
+              (room["id"], image_id)):
         return True
     if db.one("SELECT 1 FROM messages WHERE room_id=? AND image_id=?", (room["id"], image_id)):
         return True  # a scene photo posted in this room
@@ -548,3 +594,87 @@ def request_photo(db: Database, user: User, room_pid: str, body: PhotoIn, wake_w
     _notify_room(room["id"])
     wake_worker()
     return {"image_job": image_job_dict(db.one("SELECT * FROM image_jobs WHERE id=?", (jid,))), "duplicate": False}
+
+
+# ---------------------------------------------------------------------------
+# personal chat with a character (persona)
+# ---------------------------------------------------------------------------
+def create_chat(db: Database, user: User, persona_row) -> dict:
+    count = db.one("SELECT COUNT(*) n FROM rooms WHERE owner_id=?", (user.id,))["n"]
+    if count >= 200:
+        raise ApiError(400, "too_many_rooms", "Слишком много чатов и сцен. Удали старые.")
+    p = persona_row
+    name = p["name"].strip() or "Персонаж"
+    ts = now_ms()
+    with db.tx():
+        cur = db.run(
+            "INSERT INTO rooms(public_id, kind, story_id, owner_id, title, rev, meta_rev, next_seq, ai_mode, created_at, updated_at) "
+            "VALUES(?, 'chat', NULL, ?, ?, 1, 1, 1, ?, ?, ?)",
+            (new_id(), user.id, name, settings.new_room_ai_mode(), ts, ts),
+        )
+        room_id = cur.lastrowid
+        db.run("INSERT INTO room_personas(room_id, persona_id, position) VALUES(?,?,0)", (room_id, p["id"]))
+        greeting = p["first_message"].strip() or f"*{name} замечает тебя и улыбается.*"
+        _insert_msg(db, room_id, 1, 1, "character", None, None, name, greeting, None, None, persona_id=p["id"])
+        db.run("UPDATE rooms SET next_seq=2 WHERE id=?", (room_id,))
+    return room_detail(db, user, db.one("SELECT * FROM rooms WHERE id=?", (room_id,)))
+
+
+def chats_with_persona(db: Database, user: User, persona_id: int) -> list[dict]:
+    rows = db.all(
+        "SELECT r.public_id, r.updated_at FROM rooms r JOIN room_personas rp ON rp.room_id=r.id "
+        "WHERE r.kind='chat' AND r.owner_id=? AND rp.persona_id=? ORDER BY r.updated_at DESC LIMIT 20",
+        (user.id, persona_id),
+    )
+    return [{"id": r["public_id"], "updated_at": r["updated_at"]} for r in rows]
+
+
+def edit_message(db: Database, user: User, room_pid: str, message_pid: str, body: EditIn) -> dict:
+    """Players edit their own lines; the room owner may also fix the AI's lines.
+    The next generation sees the edited text."""
+    room = member_room(db, user, room_pid)
+    m = db.one("SELECT * FROM messages WHERE room_id=? AND public_id=? AND hidden=0", (room["id"], message_pid))
+    if not m or m["kind"] == "system" or m["image_id"]:
+        raise not_found("Сообщение не найдено")
+    if m["kind"] == "player":
+        if m["user_id"] != user.id:
+            raise ApiError(403, "not_yours", "Можно изменить только своё сообщение.")
+    elif room["owner_id"] != user.id:
+        raise ApiError(403, "not_owner", "Ответы ИИ может править только хозяин.")
+    text = body.text.strip()
+    if not text:
+        raise ApiError(400, "empty", "Сообщение пустое.")
+    with db.tx():
+        rev = _bump(db, room["id"])
+        db.run("UPDATE messages SET text=?, edited_at=?, rev=? WHERE id=?", (text, now_ms(), rev, m["id"]))
+        db.run("DELETE FROM scene_facts WHERE message_id=?", (m["id"],))
+        if m["kind"] in ("player", "character"):
+            for f in P.extract_facts(m["speaker_name"], text):
+                db.run("INSERT INTO scene_facts(room_id, message_id, generation_id, seq, text) VALUES(?,?,?,?,?)",
+                       (room["id"], m["id"], m["generation_id"], m["seq"], f))
+    _notify_room(room["id"])
+    return {"message": message_dict(db, db.one("SELECT * FROM messages WHERE id=?", (m["id"],)), user)}
+
+
+async def suggest_replies(db: Database, user: User, room_pid: str) -> dict:
+    """Three short options for the player's next turn (not stored)."""
+    room = member_room(db, user, room_pid)
+    seats = seats_of(db, room)
+    hero = next((s["hero_name"] for s in seats if s["user"] and s["user"]["id"] == user.public_id), user.nick)
+    if room["story_id"] is None:
+        others = [p["name"] for p in room_personas(db, room)]
+    else:
+        others = [c["name"] for c in db.all("SELECT name FROM characters WHERE story_id=? AND role='npc' ORDER BY position",
+                                            (room["story_id"],))]
+    rows = db.all("SELECT * FROM messages WHERE room_id=? AND hidden=0 AND kind<>'system' AND image_id IS NULL "
+                  "ORDER BY seq DESC LIMIT 12", (room["id"],))
+    history = [P.HistoryItem(r["seq"], r["kind"], r["speaker_name"] or P.NARRATOR, r["text"]) for r in reversed(rows)]
+    provider = "cloud" if room["ai_mode"] == "cloud" and settings.cloud_available else "local"
+    try:
+        res = await llm.chat(P.suggest_messages(hero, others, history), num_predict=260, temperature=0.95, provider=provider)
+    except llm.LLMError as e:
+        raise ApiError(502, "ai_failed", f"ИИ не ответил: {e}")
+    options = P.parse_suggestions(res.text)
+    if not options:
+        raise ApiError(502, "ai_bad_output", "ИИ не смог предложить варианты. Попробуй ещё раз.")
+    return {"suggestions": options}

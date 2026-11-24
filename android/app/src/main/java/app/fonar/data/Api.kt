@@ -194,6 +194,10 @@ class Api(
     suspend fun avatarStyles(): AvatarStylesRes = get("/v1/avatar-styles")
     suspend fun generateAvatar(name: String, description: String, style: String): AvatarGenRes =
         post("/v1/avatars/generate", AvatarGenReq(name, description, style))
+    suspend fun startChat(personaId: String): RoomRes = postEmpty("/v1/personas/$personaId/chats")
+    suspend fun editMessage(roomId: String, messageId: String, text: String): EditRes =
+        patch("/v1/rooms/$roomId/messages/$messageId", EditReq(text))
+    suspend fun suggest(roomId: String): SuggestRes = postEmpty("/v1/rooms/$roomId/suggest")
     fun personaAvatarUrl(p: PersonaDto): String? = p.avatar_image_id?.let { url("/v1/personas/${p.id}/avatar?v=$it") }
 
     fun ownImageUrl(id: String) = url("/v1/images/$id")
