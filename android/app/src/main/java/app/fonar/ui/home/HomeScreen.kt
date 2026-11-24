@@ -118,7 +118,13 @@ fun HomeScreen(nav: NavHostController) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Фонарь", style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            androidx.compose.ui.text.buildAnnotatedString {
+                                append("Gram")
+                                pushStyle(androidx.compose.ui.text.SpanStyle(color = Fonar.Lamp)); append("Soul"); pop()
+                            },
+                            style = MaterialTheme.typography.titleLarge,
+                        )
                         Text(graph.me?.nick ?: "", style = MaterialTheme.typography.labelMedium, color = Fonar.Muted,
                             modifier = Modifier.testTag("my_nick"))
                     }

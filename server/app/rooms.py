@@ -33,6 +33,15 @@ class InviteIn(BaseModel):
     user_id: str
 
 
+class RoomSettingsIn(BaseModel):
+    ai_mode: str = Field(pattern="^(local|cloud)$")
+
+
+class PhotoIn(BaseModel):
+    client_id: str = Field(min_length=8, max_length=64)
+    prompt: str = Field(default="", max_length=300)
+
+
 # ---------------------------------------------------------------------------
 def member_room(db: Database, user: User, room_pid: str):
     """Return the room row if ``user`` sits in it; otherwise 404 (no existence leak)."""
@@ -92,6 +101,10 @@ def room_detail(db: Database, user: User, room) -> dict:
         "my_seat": 0 if room["owner_id"] == user.id else 1,
         "seats": seats_of(db, room),
         "scene_location": room["scene_location"],
+        "ai_mode": room["ai_mode"],
+        "cloud_available": settings.cloud_available,
+        "images_available": settings.cloud_available,
+        "ai_models": {"local": settings.llm_model, "cloud": settings.cloud_text_model, "image": settings.cloud_image_model},
         "summary": room["summary"],
         "invite": ({"id": invite["public_id"], "status": invite["status"],
                     "to": {"id": invite["upid"], "nick": invite["nick"]}} if invite else None),
@@ -112,9 +125,9 @@ def create_room(db: Database, user: User, story_pid: str) -> dict:
     with db.tx():
         pid = new_id()
         cur = db.run(
-            "INSERT INTO rooms(public_id, story_id, owner_id, rev, meta_rev, next_seq, scene_location, created_at, updated_at) "
-            "VALUES(?,?,?,1,1,1,?,?,?)",
-            (pid, story["id"], user.id, story["start_scene"], ts, ts),
+            "INSERT INTO rooms(public_id, story_id, owner_id, rev, meta_rev, next_seq, scene_location, ai_mode, created_at, updated_at) "
+            "VALUES(?,?,?,1,1,1,?,?,?,?)",
+            (pid, story["id"], user.id, story["start_scene"], settings.new_room_ai_mode(), ts, ts),
         )
         room_id = cur.lastrowid
         chars = {c["id"]: c for c in db.all("SELECT * FROM characters WHERE story_id=?", (story["id"],))}
@@ -159,8 +172,10 @@ def list_rooms(db: Database, user: User) -> list[dict]:
     )
     out = []
     for r in rows:
-        last = db.one("SELECT speaker_name, text FROM messages WHERE room_id=? AND hidden=0 ORDER BY seq DESC LIMIT 1",
+        last = db.one("SELECT speaker_name, text, image_id FROM messages WHERE room_id=? AND hidden=0 ORDER BY seq DESC LIMIT 1",
                       (r["id"],))
+        if last and last["image_id"]:
+            last = {"speaker_name": "", "text": "📷 Фото сцены"}
         partner_id = r["guest_id"] if r["owner_id"] == user.id else r["owner_id"]
         out.append({
             "id": r["public_id"],
@@ -257,21 +272,25 @@ def answer_invite(db: Database, user: User, invite_pid: str, accept: bool) -> di
 # ---------------------------------------------------------------------------
 # messages
 # ---------------------------------------------------------------------------
-def _insert_msg(db, room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id) -> int:
+def _insert_msg(db, room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id,
+                image_id=None) -> int:
     cur = db.run(
         "INSERT INTO messages(public_id, room_id, seq, rev, kind, user_id, character_id, speaker_name, text, client_id, "
-        "generation_id, hidden, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,0,?)",
-        (new_id(), room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id, now_ms()),
+        "generation_id, image_id, hidden, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,?)",
+        (new_id(), room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id, image_id,
+         now_ms()),
     )
     return cur.lastrowid
 
 
-def _append(db, room_id, kind, user_id, character_id, speaker, text, client_id=None, generation_id=None) -> int:
+def _append(db, room_id, kind, user_id, character_id, speaker, text, client_id=None, generation_id=None,
+            image_id=None) -> int:
     """Append a message at the end of the room in server order. Inside a transaction."""
     rev = _bump(db, room_id)
     seq = db.one("SELECT next_seq FROM rooms WHERE id=?", (room_id,))["next_seq"]
     db.run("UPDATE rooms SET next_seq=next_seq+1 WHERE id=?", (room_id,))
-    return _insert_msg(db, room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id)
+    return _insert_msg(db, room_id, seq, rev, kind, user_id, character_id, speaker, text, client_id, generation_id,
+                       image_id)
 
 
 def _insert_system(db, room_id, text) -> int:
@@ -308,6 +327,7 @@ def message_dict(db: Database, m, viewer: User | None = None, user_cache: dict |
         "speaker_name": m["speaker_name"],
         "text": m["text"],
         "generation_id": gpid,
+        "image_id": m["image_id"],
         "hidden": bool(m["hidden"]),
         "client_id": m["client_id"] if (viewer and m["user_id"] == viewer.id) else None,
         "created_at": m["created_at"],
@@ -404,7 +424,8 @@ def request_generation(db: Database, user: User, room_pid: str, kind: str, clien
         if kind == "continue" and active["kind"] in ("reply", "continue"):
             return {"generation": generation_dict(db, active), "duplicate": True}
         raise ApiError(409, "busy", "ИИ уже отвечает. Дождись окончания.")
-    last_visible = db.one("SELECT * FROM messages WHERE room_id=? AND hidden=0 ORDER BY seq DESC LIMIT 1", (room["id"],))
+    last_visible = db.one("SELECT * FROM messages WHERE room_id=? AND hidden=0 AND image_id IS NULL AND kind<>'system' "
+                          "ORDER BY seq DESC LIMIT 1", (room["id"],))
     if kind == "retry":
         last = _last_user_generation(db, room["id"])
         if last and last["status"] == "failed" and last["kind"] == "regenerate":
@@ -445,6 +466,7 @@ def sync_payload(db: Database, user: User, room, since: int) -> dict:
         "rev": room["rev"],
         "messages": msgs,
         "generation": generation_dict(db, _last_user_generation(db, room["id"])),
+        "image_job": image_job_dict(db.one("SELECT * FROM image_jobs WHERE room_id=? ORDER BY id DESC LIMIT 1", (room["id"],))),
         "full": since == 0,
     }
     if since < room["meta_rev"]:
@@ -472,4 +494,57 @@ def room_image_allowed(db: Database, user: User, room_pid: str, image_id: str) -
         return True
     if db.one("SELECT 1 FROM characters WHERE story_id=? AND avatar_image_id=?", (room["story_id"], image_id)):
         return True
+    if db.one("SELECT 1 FROM messages WHERE room_id=? AND image_id=?", (room["id"], image_id)):
+        return True  # a scene photo posted in this room
     return False
+
+
+# ---------------------------------------------------------------------------
+# AI mode and scene photos
+# ---------------------------------------------------------------------------
+def set_settings(db: Database, user: User, room_pid: str, body: RoomSettingsIn) -> dict:
+    room = member_room(db, user, room_pid)
+    if room["owner_id"] != user.id:
+        raise ApiError(403, "not_owner", "Переключать ИИ может только хозяин сцены.")
+    if body.ai_mode == "cloud" and not settings.cloud_available:
+        raise ApiError(400, "cloud_unavailable", "Облачный ИИ не настроен на сервере (нет ключа OpenRouter).")
+    if body.ai_mode != room["ai_mode"]:
+        with db.tx():
+            db.run("UPDATE rooms SET ai_mode=? WHERE id=?", (body.ai_mode, room["id"]))
+            _insert_system(db, room["id"], "ИИ переключён: " + ("облачный" if body.ai_mode == "cloud" else "локальный") + ".")
+            _bump(db, room["id"], meta=True)
+        _notify_room(room["id"])
+    return {"ai_mode": body.ai_mode}
+
+
+def image_job_dict(j) -> dict | None:
+    if j is None:
+        return None
+    return {"id": j["public_id"], "status": j["status"], "error": j["error"], "prompt": j["user_prompt"],
+            "image_id": j["image_id"]}
+
+
+def request_photo(db: Database, user: User, room_pid: str, body: PhotoIn, wake_worker) -> dict:
+    room = member_room(db, user, room_pid)
+    if not settings.cloud_available:
+        raise ApiError(400, "cloud_unavailable", "Фото доступны только с облачным ИИ (на сервере нет ключа OpenRouter).")
+    dup = db.one("SELECT * FROM image_jobs WHERE room_id=? AND requested_by=? AND client_id=?", (room["id"], user.id, body.client_id))
+    if dup:
+        return {"image_job": image_job_dict(dup), "duplicate": True}
+    active = db.one("SELECT * FROM image_jobs WHERE room_id=? AND status IN ('queued','running')", (room["id"],))
+    if active:
+        return {"image_job": image_job_dict(active), "duplicate": True}
+    day_ago = now_ms() - 86_400_000
+    used = db.one("SELECT COUNT(*) n FROM image_jobs WHERE requested_by=? AND created_at>?", (user.id, day_ago))["n"]
+    if used >= settings.rl_images_per_day:
+        raise ApiError(429, "rate_limited", f"Лимит фото на сегодня исчерпан ({settings.rl_images_per_day}).")
+    with db.tx():
+        jid = db.run(
+            "INSERT INTO image_jobs(public_id, room_id, requested_by, client_id, user_prompt, status, created_at) "
+            "VALUES(?,?,?,?,?, 'queued', ?)",
+            (new_id(), room["id"], user.id, body.client_id, body.prompt.strip(), now_ms()),
+        ).lastrowid
+        _bump(db, room["id"])
+    _notify_room(room["id"])
+    wake_worker()
+    return {"image_job": image_job_dict(db.one("SELECT * FROM image_jobs WHERE id=?", (jid,))), "duplicate": False}

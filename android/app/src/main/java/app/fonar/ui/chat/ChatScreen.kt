@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -31,6 +32,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.outlined.AutoFixHigh
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.FastForward
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PersonAdd
@@ -110,6 +114,10 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
     var menu by remember { mutableStateOf(false) }
     var showInvite by remember { mutableStateOf(false) }
     var showScene by remember { mutableStateOf(false) }
+    var showAiMode by remember { mutableStateOf(false) }
+    var showPhoto by remember { mutableStateOf(false) }
+    var fullImage by remember { mutableStateOf<String?>(null) }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     var confirmLeave by remember { mutableStateOf(false) }
     var input by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     val listState = rememberLazyListState()
@@ -157,6 +165,13 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                     }
                 },
                 actions = {
+                    if (room != null) {
+                        val cloud = room.ai_mode == "cloud"
+                        IconButton(onClick = { focusManager.clearFocus(); showAiMode = true }, modifier = Modifier.testTag("ai_mode")) {
+                            Icon(if (cloud) Icons.Outlined.Cloud else Icons.Outlined.Memory,
+                                if (cloud) "Облачный ИИ" else "Локальный ИИ", tint = if (cloud) Fonar.Lamp else Fonar.Sea)
+                        }
+                    }
                     if (room != null && room.my_role == "owner" && room.seats.getOrNull(1)?.user == null) {
                         IconButton(onClick = { vm.loadFriends(); showInvite = true }, modifier = Modifier.testTag("chat_invite")) {
                             Icon(Icons.Outlined.PersonAdd, "Играть с другом", tint = Fonar.Lamp)
@@ -206,9 +221,14 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     items(s.messages, key = { it.id }) { m ->
-                        MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard)
+                        if (m.image_id != null) {
+                            PhotoMessage(m, graph.api.roomImageUrl(roomId, m.image_id)) { fullImage = it }
+                        } else {
+                            MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard)
+                        }
                     }
                     items(s.pending, key = { "p" + it.clientId }) { p -> PendingItem(p, vm) }
+                    item(key = "photo_status") { PhotoStatus(s) { showPhoto = true } }
                     item(key = "status") { GenerationStatus(s, vm) }
                 }
             }
@@ -222,6 +242,10 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                         input = TextFieldValue("")
                     },
                     vm = vm,
+                    imagesAvailable = room.images_available,
+                    photoOpen = showPhoto,
+                    onPhoto = { showPhoto = !showPhoto },
+                    onPhotoSubmit = { what -> showPhoto = false; focusManager.clearFocus(); vm.requestPhoto(what) },
                 )
             }
         }
@@ -234,6 +258,21 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
             onDismiss = { showInvite = false },
             onPick = { f -> showInvite = false; vm.invite(f.id) },
         )
+    }
+    if (showAiMode && room != null) {
+        AiModeDialog(room, onDismiss = { showAiMode = false }, onPick = { mode -> showAiMode = false; vm.setAiMode(mode) })
+    }
+    fullImage?.let { url ->
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { fullImage = null },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).clickable { fullImage = null },
+                contentAlignment = Alignment.Center) {
+                coil3.compose.AsyncImage(model = url, contentDescription = "Фото сцены",
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit, modifier = Modifier.fillMaxSize())
+            }
+        }
     }
     if (showScene && room != null) {
         var loc by remember { mutableStateOf(room.scene_location) }
@@ -449,13 +488,18 @@ private fun Composer(
     onInput: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     vm: ChatViewModel,
+    imagesAvailable: Boolean,
+    photoOpen: Boolean,
+    onPhoto: () -> Unit,
+    onPhotoSubmit: (String) -> Unit,
 ) {
     val g = s.generation
     val active = g != null && (g.status == "queued" || g.status == "running")
-    val lastIsAi = s.messages.lastOrNull()?.generation_id != null
+    val lastIsAi = s.messages.lastOrNull { it.image_id == null && it.kind != "system" }?.generation_id != null
     val regenerating = active && g?.kind == "regenerate"
     Surface(color = Fonar.Surface, tonalElevation = 2.dp) {
         Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 8.dp)) {
+            if (photoOpen) PhotoPanel(onSubmit = onPhotoSubmit, onClose = onPhoto)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AssistChip(
                     onClick = { vm.continueScene() },
@@ -486,6 +530,14 @@ private fun Composer(
                 )
             }
             Row(verticalAlignment = Alignment.Bottom, modifier = Modifier.padding(top = 4.dp)) {
+                if (imagesAvailable) {
+                    val photoBusy = s.imageJob?.status == "queued" || s.imageJob?.status == "running"
+                    IconButton(
+                        onClick = onPhoto,
+                        enabled = !photoBusy && !s.actionBusy,
+                        modifier = Modifier.padding(bottom = 4.dp).testTag("photo_button"),
+                    ) { Icon(Icons.Outlined.PhotoCamera, "Фото сцены", tint = if (photoBusy) Fonar.Faint else Fonar.Lamp) }
+                }
                 OutlinedTextField(
                     value = input,
                     onValueChange = { if (it.text.length <= 2000) onInput(it) },
@@ -506,6 +558,131 @@ private fun Composer(
                     modifier = Modifier.size(52.dp).testTag("send_button"),
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = Fonar.Lamp, contentColor = Fonar.OnLamp),
                 ) { Icon(Icons.AutoMirrored.Filled.Send, "Отправить") }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun PhotoMessage(m: MessageDto, url: String, onOpen: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().testTag("msg_photo"), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("ФОТО СЦЕНЫ", style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp),
+            color = Fonar.Lamp.copy(alpha = 0.8f), modifier = Modifier.padding(bottom = 6.dp))
+        coil3.compose.AsyncImage(
+            model = url, contentDescription = m.text,
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier.widthIn(max = 340.dp).fillMaxWidth(0.85f)
+                .aspectRatio(3f / 4f).clip(RoundedCornerShape(18.dp)).background(Fonar.SurfaceHigh)
+                .clickable { onOpen(url) },
+        )
+        if (m.text.isNotBlank() && m.text != "Фото сцены") {
+            Text(m.text, color = Fonar.Muted, style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
+                textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp, start = 24.dp, end = 24.dp))
+        }
+    }
+}
+
+@Composable
+private fun PhotoStatus(s: ChatState, onRetry: () -> Unit) {
+    val j = s.imageJob ?: return
+    when (j.status) {
+        "queued", "running" -> StatusRow("Рисую фото сцены…")
+        "failed" -> Surface(color = Fonar.Error.copy(alpha = 0.12f), shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().testTag("photo_failed")) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Фото не получилось: " + (j.error ?: "ошибка"), color = Fonar.Error,
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                TextButton(onClick = onRetry) { Text("Ещё раз") }
+            }
+        }
+        else -> Spacer(Modifier.height(0.dp))
+    }
+}
+
+@Composable
+private fun AiModeDialog(room: RoomDto, onDismiss: () -> Unit, onPick: (String) -> Unit) {
+    val owner = room.my_role == "owner"
+    var choice by remember { mutableStateOf(room.ai_mode) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Какой ИИ ведёт сцену") },
+        text = {
+            Column(Modifier.exposeTags(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                ModeOption(
+                    selected = choice == "local", enabled = owner, tag = "mode_local",
+                    title = "Локальный", icon = Icons.Outlined.Memory,
+                    desc = "Модель на твоём сервере (${room.ai_models["local"] ?: "Ollama"}). Бесплатно, но проще и медленнее.",
+                ) { choice = "local" }
+                ModeOption(
+                    selected = choice == "cloud", enabled = owner && room.cloud_available, tag = "mode_cloud",
+                    title = "Облачный", icon = Icons.Outlined.Cloud,
+                    desc = if (room.cloud_available)
+                        "OpenRouter (${room.ai_models["cloud"] ?: ""}). Пишет живее и подробнее, умеет рисовать фото сцены. Тратит баланс OpenRouter."
+                    else "Недоступен: на сервере не задан ключ OpenRouter.",
+                ) { choice = "cloud" }
+                if (!owner) Text("Переключать может только хозяин сцены.", color = Fonar.Faint,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            if (owner) Button(onClick = { onPick(choice) }, enabled = choice != room.ai_mode,
+                modifier = Modifier.exposeTags().testTag("mode_apply")) { Text("Переключить") }
+            else TextButton(onClick = onDismiss) { Text("Понятно") }
+        },
+        dismissButton = { if (owner) TextButton(onClick = onDismiss) { Text("Отмена") } },
+        containerColor = Fonar.Surface,
+    )
+}
+
+@Composable
+private fun ModeOption(
+    selected: Boolean, enabled: Boolean, tag: String, title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, onClick: () -> Unit,
+) {
+    Surface(
+        color = if (selected) Fonar.Lamp.copy(alpha = 0.14f) else Fonar.SurfaceHigh,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).testTag(tag),
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+            Icon(icon, null, tint = if (enabled) Fonar.Lamp else Fonar.Faint, modifier = Modifier.padding(top = 2.dp))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(title, fontWeight = FontWeight.SemiBold, color = if (enabled) Fonar.Text else Fonar.Faint)
+                Text(desc, color = Fonar.Muted, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+
+/** Inline (no extra window) request for a scene photo, shown above the message input. */
+@Composable
+private fun PhotoPanel(onSubmit: (String) -> Unit, onClose: () -> Unit) {
+    var what by rememberSaveable { mutableStateOf("") }
+    Surface(color = Fonar.SurfaceHigh, shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("photo_panel")) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.PhotoCamera, null, tint = Fonar.Lamp, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Фото сцены", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                TextButton(onClick = onClose) { Text("Отмена", color = Fonar.Muted) }
+            }
+            Text("ИИ нарисует, что сейчас происходит. Картинку увидите вы оба.",
+                color = Fonar.Muted, style = MaterialTheme.typography.bodySmall)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                OutlinedTextField(
+                    value = what, onValueChange = { if (it.length <= 300) what = it },
+                    placeholder = { Text("что показать (необязательно)", color = Fonar.Faint) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Night, unfocusedContainerColor = Fonar.Night),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f).testTag("photo_prompt"),
+                )
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { onSubmit(what) }, modifier = Modifier.testTag("photo_confirm")) { Text("Нарисовать") }
             }
         }
     }

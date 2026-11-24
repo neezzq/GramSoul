@@ -12,6 +12,7 @@ from . import prompt as P
 from .common import hub, new_id
 from .config import settings
 from .db import Database, now_ms
+from .images import process_image, save_image
 from .rooms import _append, _bump, _notify_room, seats_of
 
 log = logging.getLogger("fonar.worker")
@@ -32,6 +33,11 @@ class Worker:
                 self.db.run("UPDATE generations SET status='failed', error=?, finished_at=? WHERE id=?",
                             ("Сервер перезапускался во время генерации. Нажми «Повторить».", now_ms(), r["id"]))
                 _bump(self.db, r["room_id"])
+        for r in self.db.all("SELECT id, room_id FROM image_jobs WHERE status='running'"):
+            with self.db.tx():
+                self.db.run("UPDATE image_jobs SET status='failed', error=?, finished_at=? WHERE id=?",
+                            ("Сервер перезапускался — попробуй ещё раз.", now_ms(), r["id"]))
+                _bump(self.db, r["room_id"])
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -46,24 +52,37 @@ class Worker:
         self._wake.set()
 
     def queue_length(self) -> int:
-        return self.db.one("SELECT COUNT(*) n FROM generations WHERE status IN ('queued','running')")["n"]
+        return (self.db.one("SELECT COUNT(*) n FROM generations WHERE status IN ('queued','running')")["n"]
+                + self.db.one("SELECT COUNT(*) n FROM image_jobs WHERE status IN ('queued','running')")["n"])
 
     # ------------------------------------------------------------------
     def _next_job(self):
-        return self.db.one(
+        gen = self.db.one(
             "SELECT * FROM generations WHERE status='queued' ORDER BY (kind='summary'), id LIMIT 1"
         )
+        img = self.db.one("SELECT * FROM image_jobs WHERE status='queued' ORDER BY id LIMIT 1")
+        if img is not None and (gen is None or gen["kind"] == "summary" or img["created_at"] <= gen["created_at"]):
+            return ("image", img)
+        return ("gen", gen) if gen is not None else None
 
     async def _loop(self) -> None:
         while True:
             try:
-                job = self._next_job()
-                if job is None:
+                picked = self._next_job()
+                if picked is None:
                     self._wake.clear()
                     try:
                         await asyncio.wait_for(self._wake.wait(), timeout=30)
                     except asyncio.TimeoutError:
                         pass
+                    continue
+                what, job = picked
+                if what == "image":
+                    self.busy = True
+                    try:
+                        await self._run_image(job)
+                    finally:
+                        self.busy = False
                     continue
                 wait_ms = job["not_before_ms"] - now_ms()
                 if wait_ms > 0:
@@ -88,8 +107,17 @@ class Worker:
                 await asyncio.sleep(1)
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _limits(room) -> dict:
+        if room["ai_mode"] == "cloud":
+            return {"provider": "cloud", "model": settings.cloud_text_model, "num_ctx": settings.cloud_ctx_tokens,
+                    "num_predict": settings.cloud_max_tokens, "recent": settings.cloud_recent_messages, "rich": True}
+        return {"provider": "local", "model": settings.llm_model, "num_ctx": settings.llm_num_ctx,
+                "num_predict": settings.llm_num_predict, "recent": settings.ctx_recent_messages, "rich": False}
+
     def _load_prompt_input(self, room, mode: str, exclude_generation: int | None) -> tuple[P.PromptInput, list[P.Card], list[P.Seat]]:
         db = self.db
+        lim = self._limits(room)
         story = db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],))
         chars = db.all("SELECT * FROM characters WHERE story_id=? ORDER BY position", (room["story_id"],))
 
@@ -114,8 +142,9 @@ class Worker:
             excl = " AND (generation_id IS NULL OR generation_id<>?)"
             params.append(exclude_generation)
         rows = db.all(
-            f"SELECT * FROM messages WHERE room_id=? AND hidden=0 AND seq>? AND kind<>'system'{excl} ORDER BY seq DESC LIMIT ?",
-            (*params, settings.ctx_recent_messages),
+            f"SELECT * FROM messages WHERE room_id=? AND hidden=0 AND seq>? AND kind<>'system' AND image_id IS NULL{excl} "
+            "ORDER BY seq DESC LIMIT ?",
+            (*params, lim["recent"]),
         )
         history = [P.HistoryItem(r["seq"], r["kind"], r["speaker_name"] or P.NARRATOR, r["text"]) for r in reversed(rows)]
         fparams = [room["id"]]
@@ -128,7 +157,7 @@ class Worker:
         inp = P.PromptInput(
             title=story["title"], description=story["description"], world_rules=story["world_rules"],
             location=room["scene_location"], npcs=npcs, seats=seats, summary=room["summary"], history=history,
-            facts=facts, mode=mode, num_ctx=settings.llm_num_ctx, num_predict=settings.llm_num_predict,
+            facts=facts, mode=mode, num_ctx=lim["num_ctx"], num_predict=lim["num_predict"], rich=lim["rich"],
         )
         return inp, npcs, seats
 
@@ -139,17 +168,19 @@ class Worker:
             return
         replaces = job["replaces_generation_id"]
         if job["kind"] == "regenerate":
-            last_visible = db.one("SELECT generation_id FROM messages WHERE room_id=? AND hidden=0 ORDER BY seq DESC LIMIT 1",
-                                  (room["id"],))
+            last_visible = db.one("SELECT generation_id FROM messages WHERE room_id=? AND hidden=0 AND image_id IS NULL "
+                                  "AND kind<>'system' ORDER BY seq DESC LIMIT 1", (room["id"],))
             if not last_visible or last_visible["generation_id"] != replaces:
                 self._finish_failed(job, "Последний ответ уже изменился — перегенерация отменена.")
                 return
         mode = "continue" if job["kind"] == "continue" else "reply"
         inp, npcs, seats = self._load_prompt_input(room, mode, replaces if job["kind"] == "regenerate" else None)
         built = P.build(inp)
+        lim = self._limits(room)
+        provider = lim["provider"]
         with db.tx():
-            db.run("UPDATE generations SET status='running', started_at=?, model=?, prompt=?, card_versions=? WHERE id=?",
-                   (now_ms(), settings.llm_model, built.text, P.card_versions_json(npcs, seats), job["id"]))
+            db.run("UPDATE generations SET status='running', started_at=?, model=?, provider=?, prompt=?, card_versions=? WHERE id=?",
+                   (now_ms(), lim["model"], provider, built.text, P.card_versions_json(npcs, seats), job["id"]))
             _bump(db, room["id"])
         hub.partial_start(room["id"], job["public_id"])
         _notify_room(room["id"])
@@ -173,19 +204,22 @@ class Worker:
         for attempt in range(3):
             if attempt and time.monotonic() - t_start > 120:
                 break
-            temperature = None if attempt == 0 else min(1.2, settings.llm_temperature + 0.25 * attempt)
+            base_t = settings.cloud_temperature if provider == "cloud" else settings.llm_temperature
+            temperature = None if attempt == 0 else min(1.2, base_t + 0.2 * attempt)
             messages = [dict(m) for m in built.messages]
             extra = None
             prefill = ""
             if attempt:
-                prefill = P.NARRATOR + ":"
                 messages[-1]["content"] += "\nНе повторяй уже сказанное — придумай новую реакцию, новые детали и действия."
-                messages.append({"role": "assistant", "content": prefill})
-                extra = {"repeat_last_n": -1, "repeat_penalty": max(settings.llm_repeat_penalty, 1.2)}
+                if provider == "local":  # assistant prefill is reliable only with the local model
+                    prefill = P.NARRATOR + ":"
+                    messages.append({"role": "assistant", "content": prefill})
+                    extra = {"repeat_last_n": -1, "repeat_penalty": max(settings.llm_repeat_penalty, 1.2)}
                 hub.partial_start(room["id"], job["public_id"])
                 hub.partial_add(room["id"], prefill + " ")
             try:
                 result = await llm.chat(messages, stop=built.stop, temperature=temperature, extra_options=extra,
+                                        num_predict=lim["num_predict"], provider=provider,
                                         on_delta=lambda piece: self._on_delta(room["id"], piece))
                 if prefill:
                     result.text = prefill + " " + result.text.lstrip()
@@ -233,6 +267,50 @@ class Worker:
             self._maybe_enqueue_summary(room["id"])
         _notify_room(room["id"])
 
+    # ------------------------------------------------------------------
+    async def _run_image(self, job) -> None:
+        db = self.db
+        room = db.one("SELECT * FROM rooms WHERE id=?", (job["room_id"],))
+        if room is None:
+            return
+        story = db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],))
+        inp, npcs, seats = self._load_prompt_input(room, "reply", None)
+        present = set(P.present_names(inp))
+        in_frame = [c for c in npcs if c.name in present] + [s.hero for s in seats if s.hero]
+        prompt = P.image_prompt(story["title"], story["world_rules"], room["scene_location"], in_frame,
+                                inp.history, job["user_prompt"])
+        with db.tx():
+            db.run("UPDATE image_jobs SET status='running', model=?, prompt=? WHERE id=?",
+                   (settings.cloud_image_model, prompt, job["id"]))
+            _bump(db, room["id"])
+        _notify_room(room["id"])
+        try:
+            raw = await llm.generate_image(prompt)
+            data, w, h = await asyncio.to_thread(process_image, raw, 1280)
+        except llm.LLMError as e:
+            self._finish_image_failed(job, str(e))
+            return
+        except Exception as e:
+            log.exception("image generation failed")
+            self._finish_image_failed(job, f"Не удалось получить картинку: {type(e).__name__}")
+            return
+        if db.one("SELECT 1 FROM rooms WHERE id=?", (room["id"],)) is None:
+            return
+        with db.tx():
+            iid = save_image(db, job["requested_by"], data, w, h)
+            caption = job["user_prompt"].strip() or "Фото сцены"
+            _append(db, room["id"], "narrator", None, None, "Фото", caption, image_id=iid)
+            db.run("UPDATE image_jobs SET status='done', image_id=?, finished_at=? WHERE id=?", (iid, now_ms(), job["id"]))
+            _bump(db, room["id"])
+        _notify_room(room["id"])
+
+    def _finish_image_failed(self, job, error: str) -> None:
+        with self.db.tx():
+            self.db.run("UPDATE image_jobs SET status='failed', error=?, finished_at=? WHERE id=?",
+                        (error[:300], now_ms(), job["id"]))
+            _bump(self.db, job["room_id"])
+        _notify_room(job["room_id"])
+
     async def _on_delta(self, room_id: int, piece: str) -> None:
         hub.partial_add(room_id, piece)
 
@@ -246,15 +324,20 @@ class Worker:
     # ------------------------------------------------------------------
     def _summary_range(self, room_id: int):
         room = self.db.one("SELECT * FROM rooms WHERE id=?", (room_id,))
+        if room is None:
+            return None, []
+        keep = self._limits(room)["recent"]
         recent = self.db.all(
-            "SELECT seq FROM messages WHERE room_id=? AND hidden=0 AND kind<>'system' ORDER BY seq DESC LIMIT ?",
-            (room_id, settings.ctx_recent_messages),
+            "SELECT seq FROM messages WHERE room_id=? AND hidden=0 AND kind<>'system' AND image_id IS NULL "
+            "ORDER BY seq DESC LIMIT ?",
+            (room_id, keep),
         )
-        if len(recent) < settings.ctx_recent_messages:
+        if len(recent) < keep:
             return room, []
         boundary = recent[-1]["seq"]  # first message that stays verbatim
         old = self.db.all(
-            "SELECT * FROM messages WHERE room_id=? AND hidden=0 AND kind<>'system' AND seq>? AND seq<? ORDER BY seq",
+            "SELECT * FROM messages WHERE room_id=? AND hidden=0 AND kind<>'system' AND image_id IS NULL AND seq>? AND seq<? "
+            "ORDER BY seq",
             (room_id, room["summary_upto_seq"], boundary),
         )
         return room, old
@@ -283,7 +366,8 @@ class Worker:
                    (now_ms(), settings.llm_model, job["id"]))
         error = None
         try:
-            res = await llm.chat(msgs, num_predict=min(260, settings.llm_num_predict + 40))
+            lim = self._limits(room)
+            res = await llm.chat(msgs, num_predict=min(400, lim["num_predict"] + 40), provider=lim["provider"])
             text = " ".join(res.text.replace("<|im_end|>", "").split())
             if len(text) < 20:
                 raise llm.LLMError("слишком короткое резюме")

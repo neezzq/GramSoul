@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="night">#0E0F1A</color>
-    <color name="lamp">#F2A541</color>
+    <color name="night">#0A090C</color>
+    <color name="lamp">#FF4FA3</color>
     <style name="Theme.Fonar" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/night</item>
         <item name="android:statusBarColor">@android:color/transparent</item>

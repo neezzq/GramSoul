@@ -172,6 +172,10 @@ data class RoomDto(
     val invite: InviteDto? = null,
     val rev: Long = 0,
     val meta_rev: Long = 0,
+    val ai_mode: String = "local",
+    val cloud_available: Boolean = false,
+    val images_available: Boolean = false,
+    val ai_models: Map<String, String> = emptyMap(),
 )
 
 @Serializable
@@ -208,6 +212,7 @@ data class MessageDto(
     val speaker_name: String = "",
     val text: String,
     val generation_id: String? = null,
+    val image_id: String? = null,
     val hidden: Boolean = false,
     val client_id: String? = null,
     val created_at: Long = 0,
@@ -238,6 +243,7 @@ data class SyncRes(
     val rev: Long,
     val messages: List<MessageDto> = emptyList(),
     val generation: GenerationDto? = null,
+    val image_job: ImageJobDto? = null,
     val room: RoomDto? = null,
     val full: Boolean = false,
     val pv: Long = -1,
@@ -273,3 +279,24 @@ data class LastPromptRes(
 
 @Serializable
 data class OkRes(val ok: Boolean = true)
+
+@Serializable
+data class ImageJobDto(
+    val id: String,
+    val status: String,
+    val error: String? = null,
+    val prompt: String? = null,
+    val image_id: String? = null,
+)
+
+@Serializable
+data class RoomSettingsReq(val ai_mode: String)
+
+@Serializable
+data class RoomSettingsRes(val ai_mode: String)
+
+@Serializable
+data class PhotoReq(val client_id: String, val prompt: String = "")
+
+@Serializable
+data class PhotoRes(val image_job: ImageJobDto? = null, val duplicate: Boolean = false)

@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Lantern: handle, cap, glass with flame, base -->
+<!-- GramSoul: a neon "G" ring around a small soul flame -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#00000000" android:strokeColor="#F2A541" android:strokeWidth="3"
-        android:pathData="M45,34 C45,26 63,26 63,34" />
-    <path android:fillColor="#F2A541" android:pathData="M40,35 L68,35 L64,41 L44,41 Z" />
-    <path android:fillColor="#2A2238" android:strokeColor="#F2A541" android:strokeWidth="3"
-        android:pathData="M44,41 L64,41 L66,70 L42,70 Z" />
-    <path android:fillColor="#FFD58A"
-        android:pathData="M54,46 C58,52 60,56 60,60 C60,64 57,67 54,67 C51,67 48,64 48,60 C48,56 51,52 54,46 Z" />
-    <path android:fillColor="#F2A541" android:pathData="M54,53 C56,57 57,59 57,61 C57,63 55.6,64.5 54,64.5 C52.4,64.5 51,63 51,61 C51,59 52,57 54,53 Z" />
-    <path android:fillColor="#F2A541" android:pathData="M39,70 L69,70 L69,75 L39,75 Z" />
+    <!-- G ring (open on the right, with the inner bar) -->
+    <path android:fillColor="#00000000" android:strokeColor="#FF4FA3" android:strokeWidth="6.5" android:strokeLineCap="round"
+        android:pathData="M74,40 A24,24 0 1,0 78,58" />
+    <path android:fillColor="#00000000" android:strokeColor="#FF4FA3" android:strokeWidth="6.5" android:strokeLineCap="round"
+        android:pathData="M78,58 L62,58" />
+    <!-- soul flame -->
+    <path android:fillColor="#FF9BCB"
+        android:pathData="M53,40 C58,46 61,51 61,56 C61,61 57.5,65 53,65 C48.5,65 45,61 45,56 C45,51 48,46 53,40 Z" />
+    <path android:fillColor="#FFFFFF" android:fillAlpha="0.85"
+        android:pathData="M53,49 C55.5,52.5 56.5,54.5 56.5,57 C56.5,59.5 55,61.5 53,61.5 C51,61.5 49.5,59.5 49.5,57 C49.5,54.5 50.5,52.5 53,49 Z" />
 </vector>

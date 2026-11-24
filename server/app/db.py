@@ -186,7 +186,32 @@ CREATE TABLE IF NOT EXISTS scene_facts(
   hidden INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS scene_facts_room ON scene_facts(room_id, hidden, seq);
+
+CREATE TABLE IF NOT EXISTS image_jobs(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  requested_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  client_id TEXT,
+  user_prompt TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed')),
+  error TEXT,
+  model TEXT,
+  prompt TEXT,
+  image_id TEXT REFERENCES images(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  UNIQUE(room_id, requested_by, client_id)
+);
+CREATE INDEX IF NOT EXISTS image_jobs_queue ON image_jobs(status, id);
 """
+
+# columns added after the first release (ALTER TABLE keeps existing data)
+MIGRATIONS = [
+    ("rooms", "ai_mode", "ALTER TABLE rooms ADD COLUMN ai_mode TEXT NOT NULL DEFAULT 'local'"),
+    ("messages", "image_id", "ALTER TABLE messages ADD COLUMN image_id TEXT"),
+    ("generations", "provider", "ALTER TABLE generations ADD COLUMN provider TEXT"),
+]
 
 
 def now_ms() -> int:
@@ -205,6 +230,10 @@ class Database:
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.executescript(SCHEMA)
+        for table, column, sql in MIGRATIONS:
+            cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
+            if column not in cols:
+                self.conn.execute(sql)
 
     # -- helpers -------------------------------------------------------
     def one(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Row | None:

@@ -48,6 +48,21 @@ class Settings:
     # "fake" = deterministic offline generator used only by automated tests
     llm_backend: str = field(default_factory=lambda: _env("LLM_BACKEND", "ollama"))
 
+    # --- cloud AI (OpenRouter). The key lives only on the server, never in the APK. ---
+    openrouter_api_key: str = field(default_factory=lambda: _env("OPENROUTER_API_KEY", "").strip())
+    openrouter_base_url: str = field(default_factory=lambda: _env("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
+    cloud_text_model: str = field(default_factory=lambda: _env("CLOUD_TEXT_MODEL", "deepseek/deepseek-v4.1-flash"))
+    cloud_image_model: str = field(default_factory=lambda: _env("CLOUD_IMAGE_MODEL", "google/gemini-3.1-flash-lite-image"))
+    cloud_ctx_tokens: int = field(default_factory=lambda: _int("CLOUD_CTX_TOKENS", 16000))
+    cloud_max_tokens: int = field(default_factory=lambda: _int("CLOUD_MAX_TOKENS", 700))
+    cloud_temperature: float = field(default_factory=lambda: _float("CLOUD_TEMPERATURE", 0.9))
+    cloud_recent_messages: int = field(default_factory=lambda: _int("CLOUD_RECENT_MESSAGES", 40))
+    cloud_timeout_s: int = field(default_factory=lambda: _int("CLOUD_TIMEOUT_S", 120))
+    cloud_reasoning: str = field(default_factory=lambda: _env("CLOUD_REASONING", "off"))  # off | low | medium | high
+    # mode for new scenes: auto = cloud when a key is configured, else local
+    default_ai_mode: str = field(default_factory=lambda: _env("DEFAULT_AI_MODE", "auto"))
+    rl_images_per_day: int = field(default_factory=lambda: _int("RL_IMAGES_PER_DAY", 30))
+
     # --- limits ---
     max_characters: int = 10
     max_image_bytes: int = field(default_factory=lambda: _int("MAX_IMAGE_BYTES", 6 * 1024 * 1024))
@@ -58,6 +73,15 @@ class Settings:
     rl_messages_per_min: int = field(default_factory=lambda: _int("RL_MESSAGES_PER_MIN", 30))
     rl_uploads_per_hour: int = field(default_factory=lambda: _int("RL_UPLOADS_PER_HOUR", 60))
     sync_wait_max_s: int = 25
+
+    @property
+    def cloud_available(self) -> bool:
+        return bool(self.openrouter_api_key) or self.llm_backend == "fake"
+
+    def new_room_ai_mode(self) -> str:
+        if self.default_ai_mode in ("local", "cloud"):
+            return "cloud" if (self.default_ai_mode == "cloud" and self.cloud_available) else "local"
+        return "cloud" if self.cloud_available else "local"
 
     @property
     def db_path(self) -> str:

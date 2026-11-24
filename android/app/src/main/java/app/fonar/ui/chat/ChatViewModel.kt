@@ -6,6 +6,7 @@ import app.fonar.AppGraph
 import app.fonar.data.ApiException
 import app.fonar.data.FriendsRes
 import app.fonar.data.GenerationDto
+import app.fonar.data.ImageJobDto
 import app.fonar.data.LastPromptRes
 import app.fonar.data.MessageDto
 import app.fonar.data.NetworkException
@@ -26,6 +27,7 @@ data class ChatState(
     val messages: List<MessageDto> = emptyList(),
     val pending: List<Pending> = emptyList(),
     val generation: GenerationDto? = null,
+    val imageJob: ImageJobDto? = null,
     val rev: Long = 0,
     val online: Boolean = true,
     val loadError: String? = null,
@@ -62,6 +64,7 @@ class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
                     first = false
                     backoff = 1000L
                     apply(res.rev, res.messages, res.generation, res.room, res.pv)
+                    _state.update { it.copy(imageJob = res.image_job) }
                     if (!_state.value.online) {
                         _state.update { it.copy(online = true) }
                         resendFailed()
@@ -167,6 +170,16 @@ class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
     fun retry() = action { id -> g.api.retry(roomId, id).generation?.let { gen -> _state.update { it.copy(generation = gen) } } }
 
     fun setScene(location: String) = action { g.api.setScene(roomId, location) }
+
+    fun setAiMode(mode: String) = action {
+        g.api.setAiMode(roomId, mode)
+        _state.update { s -> s.copy(room = s.room?.copy(ai_mode = mode)) }
+    }
+
+    fun requestPhoto(prompt: String) = action { id ->
+        val res = g.api.photo(roomId, id, prompt.trim())
+        _state.update { it.copy(imageJob = res.image_job ?: it.imageJob) }
+    }
 
     fun loadFriends() {
         viewModelScope.launch { runCatching { g.api.friends() }.onSuccess { f -> _state.update { it.copy(friends = f) } } }

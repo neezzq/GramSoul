@@ -454,3 +454,72 @@ async def test_hero_only_output_retries_with_narrator_prefill(client):
     assert s["generation"]["status"] == "done"
     ai = [m for m in s["messages"] if m["generation_id"]]
     assert ai and all("встаёт" not in m["text"] for m in ai)
+
+
+
+# ---------------------------------------------------------------- cloud AI + photos
+async def test_switch_ai_mode_and_cloud_prompt(client):
+    ha, hb, a, b, room = await shared_room(client)
+    rid = room["id"]
+    d = (await client.get(f"/v1/rooms/{rid}", headers=ha)).json()["room"]
+    assert d["ai_mode"] == "local" and d["cloud_available"] is True
+    # only the owner can switch
+    r = await client.patch(f"/v1/rooms/{rid}/settings", json={"ai_mode": "cloud"}, headers=hb)
+    assert r.status_code == 403
+    r = await client.patch(f"/v1/rooms/{rid}/settings", json={"ai_mode": "cloud"}, headers=ha)
+    assert r.status_code == 200
+    sb = (await client.get(f"/v1/rooms/{rid}/sync", params={"since": 0}, headers=hb)).json()
+    assert sb["room"]["ai_mode"] == "cloud"
+    assert any("облачный" in m["text"] for m in sb["messages"] if m["kind"] == "system")
+    await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Привет #echo_system"}, headers=ha)
+    s = await wait_generation(client, ha, rid)
+    assert any("ОБЛАКО" in m["text"] for m in s["messages"])
+    lp = (await client.get(f"/v1/rooms/{rid}/last-prompt", headers=ha)).json()
+    assert "подробно" in lp["prompt"]
+    # back to local
+    await client.patch(f"/v1/rooms/{rid}/settings", json={"ai_mode": "local"}, headers=ha)
+    await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Ещё #echo_system"}, headers=hb)
+    s = await wait_generation(client, ha, rid)
+    assert any("ЛОКАЛЬНО" in m["text"] for m in s["messages"])
+
+
+async def wait_photo(client, h, rid, timeout=10.0):
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while loop.time() < end:
+        s = (await client.get(f"/v1/rooms/{rid}/sync", params={"since": 0}, headers=h)).json()
+        j = s.get("image_job")
+        if j and j["status"] in ("done", "failed"):
+            return s
+        await asyncio.sleep(0.05)
+    raise AssertionError("photo did not finish")
+
+
+async def test_scene_photo_visible_only_to_members(client):
+    ha, hb, a, b, room = await shared_room(client)
+    hc, c = await register(client, "Eve", ip="3.3.3.3")
+    rid = room["id"]
+    c1 = cid()
+    r1 = await client.post(f"/v1/rooms/{rid}/photo", json={"client_id": c1, "prompt": "маяк в тумане"}, headers=hb)
+    r2 = await client.post(f"/v1/rooms/{rid}/photo", json={"client_id": c1, "prompt": "маяк в тумане"}, headers=hb)
+    assert r1.status_code == 200 and r1.json()["image_job"]["id"] == r2.json()["image_job"]["id"]
+    s = await wait_photo(client, ha, rid)
+    assert s["image_job"]["status"] == "done"
+    photo = [m for m in s["messages"] if m["image_id"]]
+    assert len(photo) == 1 and photo[0]["text"] == "маяк в тумане"
+    iid = photo[0]["image_id"]
+    assert (await client.get(f"/v1/rooms/{rid}/images/{iid}", headers=ha)).status_code == 200
+    assert (await client.get(f"/v1/rooms/{rid}/images/{iid}", headers=hb)).status_code == 200
+    assert (await client.get(f"/v1/rooms/{rid}/images/{iid}", headers=hc)).status_code == 404
+    assert (await client.post(f"/v1/rooms/{rid}/photo", json={"client_id": cid()}, headers=hc)).status_code == 404
+    # a photo does not block regenerating the last AI reaction and is not sent to the text model
+    await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Смотри!"}, headers=ha)
+    await wait_generation(client, ha, rid)
+    await client.post(f"/v1/rooms/{rid}/photo", json={"client_id": cid()}, headers=ha)
+    await wait_photo(client, ha, rid)
+    r = await client.post(f"/v1/rooms/{rid}/regenerate", json={"client_id": cid()}, headers=ha)
+    assert r.status_code == 200, r.text
+    await asyncio.sleep(0.05)
+    await wait_generation(client, ha, rid)
+    lp = (await client.get(f"/v1/rooms/{rid}/last-prompt", headers=ha)).json()
+    assert "Фото:" not in lp["prompt"]

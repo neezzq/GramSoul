@@ -171,6 +171,9 @@ class Api(
     suspend fun retry(roomId: String, clientId: String): GenerationRes = post("/v1/rooms/$roomId/retry", ActionReq(clientId))
     suspend fun setScene(roomId: String, location: String): SceneReq = patch("/v1/rooms/$roomId/scene", SceneReq(location))
     suspend fun lastPrompt(roomId: String): LastPromptRes = get("/v1/rooms/$roomId/last-prompt")
+    suspend fun setAiMode(roomId: String, mode: String): RoomSettingsRes = patch("/v1/rooms/$roomId/settings", RoomSettingsReq(mode))
+    suspend fun photo(roomId: String, clientId: String, prompt: String): PhotoRes =
+        post("/v1/rooms/$roomId/photo", PhotoReq(clientId, prompt))
 
     fun ownImageUrl(id: String) = url("/v1/images/$id")
     fun roomImageUrl(roomId: String, id: String) = url("/v1/rooms/$roomId/images/$id")

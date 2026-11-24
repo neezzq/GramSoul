@@ -192,6 +192,22 @@ class TwoPlayerUiTest {
                 visible == b.call { sync(roomId, 0, -1, 0) }.messages.filter { !it.hidden }.map { it.id }
             }
             shot("07_chat_after_regenerate")
+            // AI mode: the owner switches the scene to the local model (the test backend has cloud enabled)
+            compose.onNodeWithTag("ai_mode").performClick()
+            compose.waitTag("mode_local")
+            shot("07a_ai_mode")
+            compose.onNodeWithTag("mode_local").performClick()
+            compose.onNodeWithTag("mode_apply").performClick()
+            compose.waitUntil(20_000) { b.call { room(roomId) }.room.ai_mode == "local" }
+            // scene photo: drawn by the image model and shown to both players
+            compose.onNodeWithTag("photo_button").performClick()
+            compose.waitTag("photo_confirm")
+            compose.onNodeWithTag("photo_prompt").performTextInput("маяк в тумане")
+            shot("07c_photo_panel")
+            compose.onNodeWithTag("photo_confirm").performClick()
+            compose.waitTag("msg_photo", 30_000)
+            assertTrue(b.call { sync(roomId, 0, -1, 0) }.messages.any { it.image_id != null && it.text == "маяк в тумане" })
+            shot("07b_photo")
             // failure keeps the turn and offers a retry
             compose.onNodeWithTag("chat_input").performTextInput("Проверка ошибки #fail")
             compose.onNodeWithTag("send_button").performClick()

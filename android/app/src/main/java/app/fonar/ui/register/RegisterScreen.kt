@@ -69,7 +69,7 @@ fun Lantern(modifier: Modifier = Modifier) {
         modifier
             .size(96.dp)
             .clip(CircleShape)
-            .background(Brush.radialGradient(listOf(Fonar.LampSoft, Fonar.Lamp.copy(alpha = 0.55f), Fonar.Night.copy(alpha = 0f))))
+            .background(Brush.radialGradient(listOf(Color3(0xFFFFD1E8), Fonar.Lamp.copy(alpha = 0.6f), Fonar.Night.copy(alpha = 0f))))
     )
 }
 
@@ -105,7 +105,7 @@ fun RegisterScreen() {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color3(0xFF2A1E10), Fonar.Night, Fonar.Night)))
+            .background(Brush.verticalGradient(listOf(Color3(0xFF3D0F27), Fonar.Night, Fonar.Night)))
             .systemBarsPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
@@ -115,7 +115,13 @@ fun RegisterScreen() {
         Spacer(Modifier.height(56.dp))
         Lantern()
         Spacer(Modifier.height(18.dp))
-        Text("Фонарь", style = MaterialTheme.typography.headlineLarge, color = Fonar.Text)
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                append("Gram")
+                pushStyle(androidx.compose.ui.text.SpanStyle(color = Fonar.Lamp)); append("Soul"); pop()
+            },
+            style = MaterialTheme.typography.headlineLarge, color = Fonar.Text,
+        )
         Text(
             "Ролевые истории на двоих\nс живым ИИ-рассказчиком",
             style = MaterialTheme.typography.bodyLarge,

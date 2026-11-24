@@ -1,8 +1,11 @@
-"""LLM client: Ollama /api/chat with streaming, plus a deterministic fake used by
-automated tests (LLM_BACKEND=fake)."""
+"""LLM clients: local Ollama (/api/chat, streaming), cloud OpenRouter (OpenAI-compatible
+chat completions + image generation) and a deterministic fake for tests (LLM_BACKEND=fake).
+The OpenRouter key is read from the server environment only."""
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import re
 import time
@@ -51,9 +54,11 @@ def _options(num_predict: int | None = None, stop: list[str] | None = None, temp
 
 async def chat(messages: list[dict], stop: list[str] | None = None, on_delta: OnDelta | None = None,
                num_predict: int | None = None, temperature: float | None = None,
-               extra_options: dict | None = None) -> LLMResult:
+               extra_options: dict | None = None, provider: str = "local") -> LLMResult:
     if settings.llm_backend == "fake":
         return await _fake_chat(messages, on_delta)
+    if provider == "cloud":
+        return await _cloud_chat(messages, stop, on_delta, num_predict, temperature)
     body = {
         "model": settings.llm_model,
         "messages": messages,
@@ -141,6 +146,148 @@ async def model_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Cloud: OpenRouter
+# ---------------------------------------------------------------------------
+def _cloud_headers() -> dict:
+    if not settings.openrouter_api_key:
+        raise LLMError("Облачный ИИ не настроен на сервере (нет ключа OpenRouter)")
+    return {"Authorization": f"Bearer {settings.openrouter_api_key}", "X-Title": "GramSoul",
+            "Content-Type": "application/json"}
+
+
+def _cloud_error(status: int, body: str) -> LLMError:
+    try:
+        msg = (json.loads(body).get("error") or {}).get("message") or body
+    except Exception:
+        msg = body
+    msg = str(msg)[:200]
+    if status == 401:
+        return LLMError("OpenRouter не принял ключ — проверь OPENROUTER_API_KEY на сервере")
+    if status == 402:
+        return LLMError("На балансе OpenRouter закончились деньги")
+    if status == 429:
+        return LLMError("OpenRouter: слишком много запросов, попробуй через минуту")
+    return LLMError(f"OpenRouter {status}: {msg}")
+
+
+def _reasoning_param() -> dict | None:
+    r = (settings.cloud_reasoning or "off").lower()
+    if r in ("", "default"):
+        return None
+    if r == "off":
+        return {"enabled": False}
+    return {"effort": r, "exclude": True}
+
+
+async def _cloud_chat(messages: list[dict], stop: list[str] | None, on_delta: OnDelta | None,
+                      max_tokens: int | None, temperature: float | None) -> LLMResult:
+    headers = _cloud_headers()
+    body: dict = {
+        "model": settings.cloud_text_model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": max_tokens or settings.cloud_max_tokens,
+        "temperature": settings.cloud_temperature if temperature is None else temperature,
+        "usage": {"include": True},
+    }
+    if stop:
+        body["stop"] = stop[:4]
+    reasoning = _reasoning_param()
+    if reasoning is not None:
+        body["reasoning"] = reasoning
+    url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
+    t0 = time.monotonic()
+    timeout = httpx.Timeout(connect=10.0, read=float(settings.cloud_timeout_s), write=30.0, pool=10.0)
+    for attempt in range(2):
+        parts: list[str] = []
+        usage: dict = {}
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, json=body, headers=headers) as resp:
+                    if resp.status_code != 200:
+                        raw = (await resp.aread()).decode("utf-8", "replace")
+                        # some models refuse the reasoning switch — retry once without it
+                        if attempt == 0 and resp.status_code == 400 and "reasoning" in raw.lower() and "reasoning" in body:
+                            body.pop("reasoning", None)
+                            continue
+                        raise _cloud_error(resp.status_code, raw)
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue  # SSE comments such as ": OPENROUTER PROCESSING"
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        if chunk.get("error"):
+                            raise LLMError("OpenRouter: " + str((chunk["error"] or {}).get("message", chunk["error"]))[:200])
+                        if chunk.get("usage"):
+                            usage = chunk["usage"]
+                        for ch in chunk.get("choices") or []:
+                            piece = (ch.get("delta") or {}).get("content") or ""
+                            if piece:
+                                parts.append(piece)
+                                if on_delta:
+                                    await on_delta(piece)
+                        if time.monotonic() - t0 > settings.cloud_timeout_s:
+                            raise LLMError("Превышено время генерации")
+            break
+        except httpx.HTTPError as e:
+            raise LLMError(f"Нет связи с OpenRouter: {type(e).__name__}") from e
+    return LLMResult(text="".join(parts), prompt_tokens=usage.get("prompt_tokens"),
+                     output_tokens=usage.get("completion_tokens"), total_ms=int((time.monotonic() - t0) * 1000))
+
+
+async def generate_image(prompt: str) -> bytes:
+    """Returns encoded image bytes (PNG/JPEG/WebP) from the cloud image model."""
+    if settings.llm_backend == "fake":
+        return _fake_image(prompt)
+    headers = _cloud_headers()
+    body = {
+        "model": settings.cloud_image_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "modalities": ["image", "text"],
+        "image_config": {"aspect_ratio": "3:4"},
+    }
+    url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)) as client:
+            resp = await client.post(url, json=body, headers=headers)
+    except httpx.HTTPError as e:
+        raise LLMError(f"Нет связи с OpenRouter: {type(e).__name__}") from e
+    if resp.status_code != 200:
+        raise _cloud_error(resp.status_code, resp.text)
+    data = resp.json()
+    if data.get("error"):
+        raise LLMError("OpenRouter: " + str((data["error"] or {}).get("message", data["error"]))[:200])
+    for ch in data.get("choices") or []:
+        msg = ch.get("message") or {}
+        for img in msg.get("images") or []:
+            url_ = ((img.get("image_url") or {}).get("url")) or ""
+            if url_.startswith("data:") and "," in url_:
+                return base64.b64decode(url_.split(",", 1)[1])
+        # some providers put the data URL into content parts
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                u = ((part or {}).get("image_url") or {}).get("url", "")
+                if u.startswith("data:") and "," in u:
+                    return base64.b64decode(u.split(",", 1)[1])
+    raise LLMError("Модель не вернула картинку (возможно, запрос отклонён фильтром). Попробуй описать иначе.")
+
+
+def _fake_image(prompt: str) -> bytes:
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (300, 400), (40, 10, 30))
+    ImageDraw.Draw(img).text((10, 10), "fake", fill=(255, 80, 160))
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
+
+
+# ---------------------------------------------------------------------------
 # Fake backend for tests. Behaviour can be steered from the player's text:
 #   "#fail"  -> raises an error,  "#slow" -> takes ~2 s.
 # ---------------------------------------------------------------------------
@@ -161,6 +308,8 @@ async def _fake_chat(messages: list[dict], on_delta: OnDelta | None) -> LLMResul
     if "#fail" in last:
         await asyncio.sleep(0.05)
         raise LLMError("Тестовая ошибка модели")
+    if "#echo_system" in last:  # tests can inspect which prompt variant was used
+        return LLMResult(text="Рассказчик: " + ("ОБЛАКО" if "подробно" in system else "ЛОКАЛЬНО") + f" №{n}")
     if system.startswith("Ты кратко пересказываешь"):
         return LLMResult(text=f"Краткое содержание №{n}: герои беседовали.")
     m = re.search(r"Пиши за: Рассказчик(?:, ([^.]+))?\.", last)

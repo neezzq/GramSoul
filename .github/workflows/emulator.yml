@@ -36,7 +36,10 @@ jobs:
           docker exec ollama ollama pull qwen2.5:0.5b
           pip install -q -r server/requirements.txt
           mkdir -p /tmp/data
+          # cloud mode is exercised against a local stand-in for the OpenRouter API (no real key in CI)
+          nohup python3 tools/mock_openrouter.py 9009 > /tmp/mock.log 2>&1 &
           (cd server && DATA_DIR=/tmp/data OLLAMA_URL=http://127.0.0.1:11434 LLM_NUM_THREAD=2 \
+             OPENROUTER_API_KEY=sk-or-mock OPENROUTER_BASE_URL=http://127.0.0.1:9009/api/v1 DEFAULT_AI_MODE=local \
              nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/api.log 2>&1 &)
           for i in $(seq 1 30); do curl -fs localhost:8000/v1/health && break; sleep 1; done
 
@@ -91,8 +94,9 @@ jobs:
       - name: Two-phone scenario
         timeout-minutes: 45
         run: |
+          CLOUD=""; [ -z "${{ inputs.backend_url }}" ] && CLOUD="--cloud"
           python3 tools/emulator_e2e.py --apk android/app/build/outputs/apk/e2e/app-e2e.apk \
-            --pkg app.fonar.e2e --a emulator-5554 --b emulator-5556 --out screens
+            --pkg app.fonar.e2e --a emulator-5554 --b emulator-5556 --out screens $CLOUD
 
       - name: Upload screenshots
         if: always()

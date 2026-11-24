@@ -7,6 +7,7 @@ import pytest_asyncio
 
 os.environ.setdefault("LLM_BACKEND", "fake")
 os.environ.setdefault("REPLY_DEBOUNCE_MS", "50")
+os.environ.setdefault("DEFAULT_AI_MODE", "local")
 
 
 @pytest_asyncio.fixture
@@ -25,7 +26,8 @@ async def client():
     import app.stories as stories
     import app.worker as worker
     import app.llm as llm
-    for m in (main, rooms, stories, worker, llm):
+    import app.images as images
+    for m in (main, rooms, stories, worker, llm, images):
         m.settings = config.settings
     from app.ratelimit import limiter
 

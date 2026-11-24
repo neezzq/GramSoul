@@ -63,6 +63,7 @@ class PromptInput:
     mode: str  # reply | continue | regenerate
     num_ctx: int
     num_predict: int
+    rich: bool = False  # cloud model: longer, more detailed reactions and full character cards
 
 
 @dataclass
@@ -99,8 +100,8 @@ FULL_FIELDS = [("Характер", "personality"), ("Речь", "speech_style")
 
 
 def card_text(c: Card, all_cards: dict[str, Card], seats: list[Seat], level: int) -> str:
-    """level 3 = rich, 2 = medium, 1 = short, 0 = name + personality only."""
-    lim = {3: 150, 2: 100, 1: 70, 0: 60}[level]
+    """level 4 = full (cloud), 3 = rich, 2 = medium, 1 = short, 0 = name + personality only."""
+    lim = {4: 700, 3: 150, 2: 100, 1: 70, 0: 60}[level]
     fields = FULL_FIELDS if level >= 2 else FULL_FIELDS[:3] if level == 1 else FULL_FIELDS[:1]
     parts = [c.name + (f" ({_clip(c.age, 20)})" if c.age.strip() else "")]
     for label, attr in fields:
@@ -112,11 +113,11 @@ def card_text(c: Card, all_cards: dict[str, Card], seats: list[Seat], level: int
         for target, attitude in (c.relationships or {}).items():
             nm = _name_of(target, all_cards, seats)
             if nm and attitude and attitude.strip() and nm != c.name:
-                rel.append(f"{nm} — {_clip(attitude, 70 if level >= 2 else 45)}")
+                rel.append(f"{nm} — {_clip(attitude, 250 if level >= 4 else 70 if level >= 2 else 45)}")
         if rel:
             parts.append("Отношение: " + "; ".join(rel))
     if level >= 2 and c.example_lines.strip():
-        ex = [l.strip() for l in c.example_lines.splitlines() if l.strip()][:1 if level == 2 else 2]
+        ex = [l.strip() for l in c.example_lines.splitlines() if l.strip()][:1 if level == 2 else 4 if level >= 4 else 2]
         if ex:
             parts.append("Пример: " + " / ".join(_clip(e, 90) for e in ex))
     return ". ".join(parts) + "."
@@ -154,12 +155,23 @@ def _system_prompt(inp: PromptInput, present: list[str], level: int, rules_lim: 
             f"мысли, чувства и решения — только реакцию мира и своих персонажей на их поступки."
         )
     ex = npc_names[0] if npc_names else "Персонаж"
-    lines.append(
-        f"Отвечай по-русски, 1–4 строки. Каждая строка начинается с имени и двоеточия. "
-        f"Действия — в *звёздочках*, речь — без них. Пример:\n"
-        f"{NARRATOR}: Ветер стучит ставнями, пламя свечи дрожит.\n"
-        f"{ex}: *оглядывается и понижает голос* Слышишь? Кажется, кто-то идёт."
-    )
+    if inp.rich:
+        lines.append(
+            "Отвечай по-русски, живо и подробно: 2–6 строк. Каждая строка начинается с имени и двоеточия. "
+            f"«{NARRATOR}: …» — атмосферное описание событий, обстановки и ощущений (2–4 предложения); "
+            "«Имя персонажа: …» — действия в *звёздочках* и реплика строго в его манере речи. "
+            "Реагируй на поступки героев конкретно, учитывай, где все находятся, кто рядом и что уже произошло. "
+            "Двигай сюжет вперёд, не повторяй уже сказанное. Пример:\n"
+            f"{NARRATOR}: Ветер стучит ставнями, пламя свечи дрожит.\n"
+            f"{ex}: *оглядывается и понижает голос* Слышишь? Кажется, кто-то идёт."
+        )
+    else:
+        lines.append(
+            f"Отвечай по-русски, 1–4 строки. Каждая строка начинается с имени и двоеточия. "
+            f"Действия — в *звёздочках*, речь — без них. Пример:\n"
+            f"{NARRATOR}: Ветер стучит ставнями, пламя свечи дрожит.\n"
+            f"{ex}: *оглядывается и понижает голос* Слышишь? Кажется, кто-то идёт."
+        )
     if inp.world_rules.strip() and rules_lim > 0:
         lines.append("Мир: " + _clip(inp.world_rules, rules_lim) + ".")
     npc_block = []
@@ -172,7 +184,8 @@ def _system_prompt(inp: PromptInput, present: list[str], level: int, rules_lim: 
     for s in inp.seats:
         desc = ""
         if s.hero and level >= 1:
-            bits = [b for b in (_clip(s.hero.personality, 60), _clip(s.hero.appearance, 60) if level >= 3 else "") if b]
+            lim_h = 300 if level >= 4 else 60
+            bits = [b for b in (_clip(s.hero.personality, lim_h), _clip(s.hero.appearance, lim_h) if level >= 3 else "") if b]
             desc = (" — " + "; ".join(bits)) if bits else ""
         hb.append(f"- {s.hero_name}{desc} (игрок {s.nick})")
     if hb:
@@ -208,7 +221,10 @@ def build(inp: PromptInput) -> BuiltPrompt:
     # the system prompt may use at most ~55% of the budget; shrink cards until it fits
     sys_budget = int(budget * 0.55)
     system = ""
-    for level, rules_lim, summary_lim in ((3, 300, 600), (2, 220, 500), (2, 160, 400), (1, 140, 350), (0, 100, 300), (0, 0, 250)):
+    levels = ((3, 300, 600), (2, 220, 500), (2, 160, 400), (1, 140, 350), (0, 100, 300), (0, 0, 250))
+    if inp.rich:
+        levels = ((4, 2500, 3000),) + levels
+    for level, rules_lim, summary_lim in levels:
         system = _system_prompt(inp, present, level, rules_lim, summary_lim)
         if len(system) <= sys_budget:
             break
@@ -445,3 +461,26 @@ def card_versions_json(npcs: list[Card], seats: list[Seat]) -> str:
         if s.hero:
             d[s.hero.public_id] = s.hero.version
     return json.dumps(d, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Scene photo prompt (cloud image model)
+# ---------------------------------------------------------------------------
+def image_prompt(title: str, world_rules: str, location: str, characters: list[Card], recent: list[HistoryItem],
+                 user_prompt: str) -> str:
+    lines = [f"Нарисуй одну иллюстрацию к текущей сцене ролевой истории «{_clip(title, 80)}»."]
+    if world_rules.strip():
+        lines.append("Мир и эпоха: " + _clip(world_rules, 350) + ".")
+    if location.strip():
+        lines.append("Место: " + _clip(location, 250) + ".")
+    looks = [f"{c.name} — {_clip(c.appearance, 220)}" for c in characters if c.appearance.strip()]
+    if looks:
+        lines.append("Внешность персонажей в кадре: " + "; ".join(looks) + ".")
+    if recent:
+        happening = " ".join(_cut(f"{h.speaker}: {h.text}", 220) for h in recent[-5:])
+        lines.append("Что происходит прямо сейчас: " + _clip(happening, 900) + ".")
+    if user_prompt.strip():
+        lines.append("Игрок просит показать: " + _clip(user_prompt, 300) + ".")
+    lines.append("Стиль: кинематографичная цифровая живопись, выразительный свет, вертикальный кадр. "
+                 "Без текста, надписей, подписей и рамок на изображении.")
+    return "\n".join(lines)

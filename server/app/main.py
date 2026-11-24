@@ -17,6 +17,7 @@ from . import llm, nick as nickmod, rooms as R, stories as S
 from .common import ApiError, User, auth_user, client_ip, hash_token, hub, new_id, new_token, not_found
 from .config import settings
 from .db import Database, now_ms
+from .images import process_image, save_image
 from .ratelimit import limiter
 from .worker import Worker
 
@@ -45,7 +46,7 @@ async def lifespan(app: FastAPI):
     state.db.close()
 
 
-app = FastAPI(title="Fonar API", version="1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="GramSoul API", version="1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.exception_handler(RequestValidationError)
@@ -81,6 +82,8 @@ def rate(key: str, limit: int, window: float, msg: str = "Слишком час�
 @app.get("/v1/health")
 async def health():
     return {"ok": True, "model": settings.llm_model, "model_ready": await llm.model_available(),
+            "cloud": bool(settings.openrouter_api_key), "cloud_model": settings.cloud_text_model,
+            "image_model": settings.cloud_image_model,
             "queue": state.worker.queue_length(), "busy": state.worker.busy}
 
 
@@ -266,26 +269,6 @@ async def inbox_wait(since: int = 0, wait: int = 25, user: User = Depends(curren
 # ---------------------------------------------------------------------------
 # images
 # ---------------------------------------------------------------------------
-def _process_image(raw: bytes) -> tuple[bytes, int, int]:
-    from PIL import Image, ImageOps
-
-    img = Image.open(io.BytesIO(raw))
-    img.load()
-    img = ImageOps.exif_transpose(img)
-    if img.mode not in ("RGB",):
-        bg = Image.new("RGB", img.size, (16, 18, 32))
-        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
-            img = img.convert("RGBA")
-            bg.paste(img, mask=img.split()[-1])
-            img = bg
-        else:
-            img = img.convert("RGB")
-    img.thumbnail((1280, 1280))
-    out = io.BytesIO()
-    img.save(out, "JPEG", quality=85, optimize=True)  # re-encode strips EXIF/GPS
-    return out.getvalue(), img.width, img.height
-
-
 @app.post("/v1/images", status_code=201)
 async def upload_image(file: UploadFile = File(...), user: User = Depends(current_user)):
     rate(f"upload:{user.id}", settings.rl_uploads_per_hour, 3600)
@@ -293,15 +276,10 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(curren
     if len(raw) > settings.max_image_bytes:
         raise ApiError(413, "too_large", "Картинка слишком большая (максимум 6 МБ).")
     try:
-        data, w, h = await asyncio.to_thread(_process_image, raw)
+        data, w, h = await asyncio.to_thread(process_image, raw)
     except Exception:
         raise ApiError(400, "bad_image", "Не удалось прочитать картинку. Выбери JPG или PNG.")
-    iid = new_id(16)
-    path = os.path.join(settings.images_dir, iid + ".jpg")
-    with open(path, "wb") as f:
-        f.write(data)
-    state.db.run("INSERT INTO images(id, owner_id, mime, size, width, height, created_at) VALUES(?,?,?,?,?,?,?)",
-                 (iid, user.id, "image/jpeg", len(data), w, h, now_ms()))
+    iid = save_image(state.db, user.id, data, w, h)
     return {"id": iid, "width": w, "height": h}
 
 
@@ -470,6 +448,17 @@ async def retry(room_id: str, body: R.ActionIn, user: User = Depends(current_use
 @app.patch("/v1/rooms/{room_id}/scene")
 async def scene(room_id: str, body: R.SceneIn, user: User = Depends(current_user), d: Database = Depends(db)):
     return R.set_scene(d, user, room_id, body)
+
+
+@app.patch("/v1/rooms/{room_id}/settings")
+async def room_settings(room_id: str, body: R.RoomSettingsIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    return R.set_settings(d, user, room_id, body)
+
+
+@app.post("/v1/rooms/{room_id}/photo")
+async def photo(room_id: str, body: R.PhotoIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"photo:{user.id}", 6, 60)
+    return R.request_photo(d, user, room_id, body, state.worker.wake)
 
 
 @app.get("/v1/rooms/{room_id}/last-prompt")

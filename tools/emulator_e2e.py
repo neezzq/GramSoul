@@ -221,6 +221,7 @@ def main():
     ap.add_argument("--b", default="emulator-5556")
     ap.add_argument("--out", default="screens")
     ap.add_argument("--gen-timeout", type=int, default=600)
+    ap.add_argument("--cloud", action="store_true", help="also test cloud AI mode and scene photos")
     args = ap.parse_args()
     PKG, OUT = args.pkg, args.out
     A, B = args.a, args.b
@@ -363,6 +364,33 @@ def main():
     rb = chat_texts(B)[-2:]
     shot(B, "12_regenerated")
     ok("regenerated reaction is the same on both phones", ra == rb, f"{ra} | {rb}")
+
+    # 7b. cloud AI + scene photo (owner switches the mode; both see cloud reactions and the photo)
+    if args.cloud:
+        tap_id(A, "ai_mode")
+        tap_id(A, "mode_cloud")
+        shot(A, "12a_ai_mode")
+        tap_id(A, "mode_apply")
+        wait(B, text="облачный", timeout=60)
+        ok("owner switched the scene to cloud AI; friend sees it", True)
+        tap_id(A, "chat_input")
+        type_text(A, "*opens the window* Look outside!")
+        tap_id(A, "send_button")
+        hide_keyboard(A)
+        wait_cond(B, lambda ns: find(ns, text="OBLAKO") is not None and generation_idle(ns), 180, "cloud_reply_B")
+        wait_cond(A, lambda ns: find(ns, text="OBLAKO") is not None, 60, "cloud_reply_A")
+        shot(B, "12b_cloud_reply")
+        ok("cloud reaction arrived on both phones", True)
+        tap_id(B, "photo_button")
+        tap_id(B, "photo_prompt")
+        type_text(B, "lighthouse in fog")
+        hide_keyboard(B)
+        shot(B, "12c_photo_panel")
+        tap_id(B, "photo_confirm")
+        wait(A, rid="msg_photo", timeout=120)
+        wait(B, rid="msg_photo", timeout=60)
+        shot(A, "12d_photo")
+        ok("scene photo with the friend's prompt shown on both phones", True)
 
     # 8. B restarts the app: automatic login, scene still there
     adb(B, "shell", "am", "force-stop", PKG)
