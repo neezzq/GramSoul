@@ -31,11 +31,11 @@ class LLMResult:
 OnDelta = Callable[[str], Awaitable[None]]
 
 
-def _options(num_predict: int | None = None, stop: list[str] | None = None) -> dict:
+def _options(num_predict: int | None = None, stop: list[str] | None = None, temperature: float | None = None) -> dict:
     opts = {
         "num_ctx": settings.llm_num_ctx,
         "num_predict": num_predict or settings.llm_num_predict,
-        "temperature": settings.llm_temperature,
+        "temperature": settings.llm_temperature if temperature is None else temperature,
         "top_p": settings.llm_top_p,
         "repeat_penalty": settings.llm_repeat_penalty,
     }
@@ -47,7 +47,7 @@ def _options(num_predict: int | None = None, stop: list[str] | None = None) -> d
 
 
 async def chat(messages: list[dict], stop: list[str] | None = None, on_delta: OnDelta | None = None,
-               num_predict: int | None = None) -> LLMResult:
+               num_predict: int | None = None, temperature: float | None = None) -> LLMResult:
     if settings.llm_backend == "fake":
         return await _fake_chat(messages, on_delta)
     body = {
@@ -55,7 +55,7 @@ async def chat(messages: list[dict], stop: list[str] | None = None, on_delta: On
         "messages": messages,
         "stream": True,
         "keep_alive": _keep_alive(),
-        "options": _options(num_predict, stop),
+        "options": _options(num_predict, stop, temperature),
     }
     t0 = time.monotonic()
     text_parts: list[str] = []

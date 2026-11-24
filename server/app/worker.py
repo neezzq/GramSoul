@@ -152,22 +152,36 @@ class Worker:
             _bump(db, room["id"])
         hub.partial_start(room["id"], job["public_id"])
         _notify_room(room["id"])
-        try:
-            result = await llm.chat(built.messages, stop=built.stop,
-                                    on_delta=lambda piece: self._on_delta(room["id"], piece))
-        except llm.LLMError as e:
-            hub.partial_clear(room["id"])
-            self._finish_failed(job, f"Модель не ответила: {e}")
-            return
-        except Exception as e:  # pragma: no cover
-            hub.partial_clear(room["id"])
-            log.exception("generation failed")
-            self._finish_failed(job, f"Ошибка генерации: {type(e).__name__}")
-            return
-        hub.partial_clear(room["id"])
         npc_names = [c.name for c in npcs]
         hero_names = [s.hero_name for s in seats]
-        parsed = P.parse_output(result.text, npc_names, hero_names)
+        recent = [r["text"] for r in db.all(
+            "SELECT text FROM messages WHERE room_id=? AND hidden=0 ORDER BY seq DESC LIMIT 30", (room["id"],))]
+        if job["kind"] == "regenerate" and replaces:
+            recent = [r["text"] for r in db.all(
+                "SELECT text FROM messages WHERE room_id=? AND hidden=0 AND (generation_id IS NULL OR generation_id<>?) "
+                "ORDER BY seq DESC LIMIT 30", (room["id"], replaces))]
+        parsed: list[P.ParsedLine] = []
+        result = None
+        # one automatic second attempt if the small model only repeated the scene or produced nothing usable
+        for attempt in range(2):
+            temperature = None if attempt == 0 else min(1.2, settings.llm_temperature + 0.3)
+            try:
+                result = await llm.chat(built.messages, stop=built.stop, temperature=temperature,
+                                        on_delta=lambda piece: self._on_delta(room["id"], piece))
+            except llm.LLMError as e:
+                hub.partial_clear(room["id"])
+                self._finish_failed(job, f"Модель не ответила: {e}")
+                return
+            except Exception as e:  # pragma: no cover
+                hub.partial_clear(room["id"])
+                log.exception("generation failed")
+                self._finish_failed(job, f"Ошибка генерации: {type(e).__name__}")
+                return
+            parsed = P.parse_output(result.text, npc_names, hero_names, history=recent)
+            if parsed:
+                break
+            hub.partial_start(room["id"], job["public_id"])
+        hub.partial_clear(room["id"])
         if not parsed:
             self._finish_failed(job, "Модель вернула пустой ответ. Попробуй ещё раз.", raw=result.text, result=result)
             return

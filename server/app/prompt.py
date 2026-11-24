@@ -5,6 +5,7 @@ The model gets: the current character cards, world rules, the scene state
 the last messages verbatim. Everything is trimmed to the configured context."""
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from dataclasses import dataclass, field
@@ -157,7 +158,7 @@ def _system_prompt(inp: PromptInput, present: list[str], level: int, rules_lim: 
         f"Отвечай по-русски, 1–4 строки. Каждая строка начинается с имени и двоеточия. "
         f"Действия — в *звёздочках*, речь — без них. Пример:\n"
         f"{NARRATOR}: Ветер стучит ставнями, пламя свечи дрожит.\n"
-        f"{ex}: *сжимает пальцы в ответ и чуть улыбается* Я просто задумалась. Не отпускай."
+        f"{ex}: *оглядывается и понижает голос* Слышишь? Кажется, кто-то идёт."
     )
     if inp.world_rules.strip() and rules_lim > 0:
         lines.append("Мир: " + _clip(inp.world_rules, rules_lim) + ".")
@@ -290,7 +291,28 @@ def _clean_text(t: str) -> str:
     return t.strip()
 
 
-def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int = 6) -> list[ParsedLine]:
+def _norm_text(t: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", (t or "").casefold()).split())
+
+
+def _is_repeat(text: str, history: list[str]) -> bool:
+    """True if the model just copied something that is already in the scene."""
+    n = _norm_text(text)
+    if len(n) < 12:
+        return False
+    for h in history:
+        hn = _norm_text(h)
+        if not hn:
+            continue
+        if n == hn or (len(n) > 25 and (n in hn or hn in n)):
+            return True
+        if len(n) > 25 and difflib.SequenceMatcher(None, n, hn).ratio() > 0.85:
+            return True
+    return False
+
+
+def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int = 6,
+                 history: list[str] | None = None) -> list[ParsedLine]:
     """Split model output into narrator / character messages.
 
     Lines attributed to the players' heroes are dropped (the AI must not speak
@@ -333,10 +355,15 @@ def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int
         else:
             out.append(ParsedLine("narrator", NARRATOR, line))
     result = []
+    seen: list[str] = list(history or [])
     for p in out:
         t = _clean_text(p.text)
-        if len(t) < 2:
-            continue
+        letters = sum(ch.isalpha() for ch in t.replace("*", ""))
+        if len(t) < 2 or letters < 2:
+            continue  # e.g. "Харитон: **"
+        if _is_repeat(t, seen):
+            continue  # copied an earlier line of the scene
+        seen.append(t)
         result.append(ParsedLine(p.kind, p.name, t[:1500]))
     return result[:max_messages]
 
