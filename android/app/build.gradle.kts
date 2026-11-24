@@ -29,6 +29,14 @@ fun cfg(name: String): String? =
 val backendUrl = (cfg("FONAR_BACKEND_URL") ?: "http://10.0.2.2:8000").trimEnd('/')
 val keystorePath = cfg("FONAR_KEYSTORE_PATH")
 
+val robolectricRuntime: Configuration by configurations.creating
+val robolectricDir = layout.buildDirectory.dir("robolectric-jars")
+val robolectricJars = tasks.register<Copy>("robolectricJars") {
+    onlyIf { robolectricDir.get().asFile.listFiles().isNullOrEmpty() }
+    from(robolectricRuntime)
+    into(robolectricDir)
+}
+
 android {
     namespace = "app.fonar"
     compileSdk = 36
@@ -68,6 +76,15 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
+        // Minified like release (R8), but may talk to a test backend on the emulator host.
+        // Used only by the emulator end-to-end workflow.
+        create("e2e") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".e2e"
+            versionNameSuffix = "-e2e"
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
+        }
     }
 
     buildFeatures {
@@ -85,7 +102,12 @@ android {
             isIncludeAndroidResources = true
             all { test ->
                 test.systemProperty("fonar.backend", System.getenv("FONAR_TEST_BACKEND") ?: "")
-                test.maxHeapSize = "2g"
+                test.maxHeapSize = "3g"
+                // Robolectric's own downloader ignores proxies; let Gradle fetch the Android jar instead.
+                test.dependsOn(robolectricJars)
+                test.systemProperty("robolectric.offline", "true")
+                test.systemProperty("robolectric.logging", "stdout")
+                test.systemProperty("robolectric.dependency.dir", robolectricDir.get().asFile.absolutePath)
             }
         }
     }
@@ -133,6 +155,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 
+    robolectricRuntime("org.robolectric:android-all-instrumented:15-robolectric-13954326-i7") { isTransitive = false }
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.16")
     testImplementation("androidx.test:core:1.7.0")

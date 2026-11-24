@@ -1,0 +1,91 @@
+name: Android
+
+# Builds the APK. When the signing secrets and BACKEND_URL are configured it also
+# publishes the signed release APK at
+#   https://github.com/<owner>/<repo>/releases/latest/download/fonar.apk
+on:
+  push:
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the signed APK as the latest release"
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      FONAR_BACKEND_URL: ${{ vars.BACKEND_URL || secrets.BACKEND_URL }}
+      FONAR_VERSION_CODE: ${{ github.run_number }}
+      FONAR_VERSION_NAME: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+
+      - name: UI tests (Robolectric) against a local backend
+        run: |
+          pip install -q -r server/requirements.txt
+          mkdir -p /tmp/data
+          (cd server && DATA_DIR=/tmp/data LLM_BACKEND=fake REPLY_DEBOUNCE_MS=300 RL_REGISTER_PER_HOUR=1000 \
+             nohup uvicorn app.main:app --port 8001 > /tmp/api.log 2>&1 &)
+          sleep 3
+          cd android && FONAR_TEST_BACKEND=http://127.0.0.1:8001 ./gradlew --no-daemon :app:testDebugUnitTest -Proborazzi.test.record=true
+
+      - name: Upload UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: ui-screens, path: android/app/build/screens, if-no-files-found: ignore }
+
+      - name: Decode signing key
+        id: sign
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            mkdir -p "$RUNNER_TEMP/sign"
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/sign/fonar.p12"
+            echo "FONAR_KEYSTORE_PATH=$RUNNER_TEMP/sign/fonar.p12" >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANDROID_KEYSTORE_B64 is not set — release APK will not be signed/published"
+          fi
+
+      - name: Build release APK
+        if: steps.sign.outputs.signed == 'true' && env.FONAR_BACKEND_URL != ''
+        env:
+          FONAR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          FONAR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          FONAR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          cd android && ./gradlew --no-daemon :app:assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/fonar.apk"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$GITHUB_WORKSPACE/fonar.apk" | head -3
+
+      - name: Build e2e APK (minified, for emulator tests)
+        run: cd android && ./gradlew --no-daemon :app:assembleE2e && cp app/build/outputs/apk/e2e/app-e2e.apk "$GITHUB_WORKSPACE/fonar-e2e.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: |
+            fonar.apk
+            fonar-e2e.apk
+          if-no-files-found: warn
+
+      - name: Publish latest release
+        if: steps.sign.outputs.signed == 'true' && env.FONAR_BACKEND_URL != '' && (github.event_name == 'push' || inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.${{ github.run_number }}"
+          gh release create "$TAG" fonar.apk --target "${{ github.sha }}" --latest \
+            --title "Фонарь $TAG" --notes "Установка: скачай fonar.apk на телефон и открой. Обновление ставится поверх предыдущей версии."

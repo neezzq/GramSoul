@@ -27,7 +27,24 @@ class FonarApp : Application(), SingletonImageLoader.Factory {
         graph = AppGraph(this, BuildConfig.BACKEND_URL)
     }
 
-    override fun newImageLoader(context: PlatformContext): ImageLoader = graph.imageLoader
+    // late-bound so that the loader always uses the current API client (and its session token)
+    override fun newImageLoader(context: PlatformContext): ImageLoader = ImageLoader.Builder(context)
+        .components { add(OkHttpNetworkFetcherFactory(callFactory = { graph.api.http })) }
+        .crossfade(true)
+        .build()
+
+    /** JVM tests point the app at a local backend; the shipped app only uses BuildConfig.BACKEND_URL. */
+    @androidx.annotation.VisibleForTesting
+    fun resetForTests(backendUrl: String) {
+        graph.sessionStore.clear()
+        graph.drafts.clearAll()
+        graph = AppGraph(this, backendUrl)
+    }
+
+    @androidx.annotation.VisibleForTesting
+    fun resetForTestsKeepPrefs(backendUrl: String) {
+        graph = AppGraph(this, backendUrl)
+    }
 }
 
 /** Simple manual dependency container. */
@@ -37,13 +54,8 @@ class AppGraph(context: Context, backendUrl: String) {
     private val _session = MutableStateFlow(sessionStore.load())
     val session: StateFlow<SessionStore.State> = _session
 
-    val api = Api(backendUrl) { (session.value as? SessionStore.State.Active)?.session?.token }
+    val api = Api(backendUrl, tokenProvider = { (session.value as? SessionStore.State.Active)?.session?.token })
     val drafts = DraftStore(context)
-
-    val imageLoader: ImageLoader = ImageLoader.Builder(context)
-        .components { add(OkHttpNetworkFetcherFactory(callFactory = { api.http })) }
-        .crossfade(true)
-        .build()
 
     init {
         appScope.launch {

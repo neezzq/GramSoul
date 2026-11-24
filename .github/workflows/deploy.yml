@@ -1,0 +1,51 @@
+name: Deploy to VPS
+
+# Runs deploy/install.sh on the VPS over SSH, then checks the public HTTPS API
+# with the two-player end-to-end script.
+# Secrets: VPS_HOST, VPS_PASSWORD (or VPS_SSH_KEY), optional VPS_USER (default root), VPS_PORT.
+# Optional repository variable DOMAIN (otherwise <ip>.sslip.io is used).
+on:
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: "Run the end-to-end check after deploy"
+        type: boolean
+        default: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Run installer on the VPS
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+          USER_: ${{ secrets.VPS_USER || 'root' }}
+          PORT: ${{ secrets.VPS_PORT || '22' }}
+          SSHPASS: ${{ secrets.VPS_PASSWORD }}
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          DOMAIN: ${{ vars.DOMAIN }}
+        run: |
+          test -n "$HOST" || { echo "::error::secret VPS_HOST is not set"; exit 1; }
+          sudo apt-get install -y -qq sshpass >/dev/null
+          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -p $PORT"
+          if [ -n "$KEY" ]; then
+            mkdir -p ~/.ssh && echo "$KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
+            RUN="ssh -i $HOME/.ssh/id $SSH_OPTS $USER_@$HOST"
+          else
+            RUN="sshpass -e ssh $SSH_OPTS $USER_@$HOST"
+          fi
+          ARGS="--branch ${{ github.ref_name }}"
+          [ -n "$DOMAIN" ] && ARGS="$ARGS --domain $DOMAIN"
+          $RUN "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/deploy/install.sh | bash -s -- $ARGS" 2>&1 | tee install.log
+          URL=$(grep -o 'https://[^ ]*' install.log | grep -v '/v1/health' | head -1)
+          echo "BACKEND=$URL" >> "$GITHUB_ENV"
+          echo "### Backend: $URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Public HTTPS end-to-end (two players + third account)
+        if: inputs.run_e2e
+        run: |
+          pip install -q httpx pillow
+          python3 server/tests/e2e_live.py "$BACKEND" 900

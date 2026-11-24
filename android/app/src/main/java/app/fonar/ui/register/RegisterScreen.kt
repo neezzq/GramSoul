@@ -171,7 +171,7 @@ fun SessionLostScreen(nick: String?) {
     ) {
         Lantern(Modifier.size(72.dp))
         Spacer(Modifier.height(20.dp))
-        Text("Сессия потеряна", style = MaterialTheme.typography.headlineSmall)
+        Text("Сессия потеряна", style = MaterialTheme.typography.headlineSmall, color = Fonar.Text)
         Spacer(Modifier.height(12.dp))
         Text(
             (if (nick != null) "Ключ входа для ника «$nick» на этом устройстве больше недействителен. " else

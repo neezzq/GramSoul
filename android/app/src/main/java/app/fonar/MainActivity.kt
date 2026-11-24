@@ -88,6 +88,7 @@ fun FonarRoot() {
                 nav.navigate(target) { popUpTo(0) { inclusive = true } }
             }
         }
+        androidx.compose.material3.Surface(color = Fonar.Night, contentColor = Fonar.Text) {
         NavHost(
             navController = nav,
             startDestination = start,
@@ -114,6 +115,7 @@ fun FonarRoot() {
             composable(Routes.CARD) { e ->
                 CharacterCardScreen(nav, e.arguments!!.getString("roomId")!!, e.arguments!!.getString("charId")!!)
             }
+        }
         }
     }
 }

@@ -131,6 +131,7 @@ fun CharacterCardScreen(nav: NavHostController, roomId: String, charId: String) 
                 )
                 nav.popBackStack()
             } catch (e: Exception) {
+                android.util.Log.w("Fonar", "card save failed", e)
                 snackbar.showSnackbar((e as? ApiException)?.message ?: "Нет связи — изменения не сохранены")
             } finally {
                 saving = false

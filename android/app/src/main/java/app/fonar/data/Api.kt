@@ -40,7 +40,12 @@ val json = Json {
     encodeDefaults = true
 }
 
-class Api(baseUrl: String, private val tokenProvider: () -> String?) {
+class Api(
+    baseUrl: String,
+    /** Where results are delivered; null = on the network thread (JVM tests only). */
+    private val resultDispatcher: kotlinx.coroutines.CoroutineDispatcher? = Dispatchers.Main.immediate,
+    private val tokenProvider: () -> String?,
+) {
     val base = baseUrl.trimEnd('/')
 
     /** Emits when the server rejects our token (session lost). */
@@ -77,7 +82,11 @@ class Api(baseUrl: String, private val tokenProvider: () -> String?) {
         cont.invokeOnCancellation { runCatching { cancel() } }
     }
 
-    private suspend fun <T> exec(req: Request, ser: KSerializer<T>, client: OkHttpClient = http): T {
+    /** Always completes on the main thread, whatever thread OkHttp answered on. */
+    private suspend fun <T> exec(req: Request, ser: KSerializer<T>, client: OkHttpClient = http): T =
+        resultDispatcher?.let { withContext(it) { execInner(req, ser, client) } } ?: execInner(req, ser, client)
+
+    private suspend fun <T> execInner(req: Request, ser: KSerializer<T>, client: OkHttpClient): T {
         val resp = client.newCall(req).await()
         resp.use { r ->
             val body = withContext(Dispatchers.IO) { r.body?.string().orEmpty() }

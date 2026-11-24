@@ -67,6 +67,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -123,11 +124,19 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
         val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
         last >= info.totalItemsCount - 3
     } }
-    LaunchedEffect(itemCount, s.generation?.status) {
-        if (itemCount > 0) listState.animateScrollToItem(itemCount - 1)
+    var initialScrollDone by remember { mutableStateOf(false) }
+    val lastKey = (s.messages.lastOrNull()?.id ?: "") + ":" + s.pending.size
+    LaunchedEffect(room != null, lastKey, s.generation?.status) {
+        if (room == null) return@LaunchedEffect
+        withFrameNanos { }  // let the list lay out the new items first
+        val count = listState.layoutInfo.totalItemsCount
+        if (count > 0) {
+            if (initialScrollDone) listState.animateScrollToItem(count - 1) else listState.scrollToItem(count - 1)
+            initialScrollDone = true
+        }
     }
     LaunchedEffect(partialLen) {
-        if (atBottom && itemCount > 0) listState.scrollToItem(itemCount - 1)
+        if (atBottom && itemCount > 0) listState.scrollToItem(listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1)
     }
 
     fun openCard(charId: String?) {
@@ -483,7 +492,7 @@ private fun Composer(
                         Text(if (regenerating) "Идёт перегенерация…" else "*действие* и реплика…", color = Fonar.Faint)
                     },
                     minLines = 1,
-                    maxLines = 5,
+                    maxLines = if (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 600) 3 else 5,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                     colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Night, unfocusedContainerColor = Fonar.Night),
                     shape = RoundedCornerShape(20.dp),
