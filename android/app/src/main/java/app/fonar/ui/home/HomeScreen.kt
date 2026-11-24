@@ -90,6 +90,7 @@ import app.fonar.ui.components.Banner
 import app.fonar.ui.components.CenterLoading
 import app.fonar.ui.components.Pill
 import app.fonar.ui.components.SectionTitle
+import app.fonar.ui.components.exposeTags
 import app.fonar.ui.theme.Fonar
 
 private enum class Tab(val title: String) { STORIES("Истории"), SCENES("Сцены"), FRIENDS("Друзья") }
@@ -197,7 +198,7 @@ fun FriendPickerDialog(
             if (friends.isEmpty()) {
                 Text("У тебя пока нет друзей, принявших заявку. Найди друга по нику во вкладке «Друзья».", color = Fonar.Muted)
             } else {
-                Column {
+                Column(Modifier.exposeTags()) {
                     Text("Выбери одного друга — он получит приглашение в приложении.", color = Fonar.Muted,
                         style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
@@ -219,7 +220,7 @@ fun FriendPickerDialog(
             if (friends.isEmpty()) {
                 if (onGoToFriends != null) TextButton(onClick = onGoToFriends) { Text("К друзьям") }
             } else {
-                Button(onClick = { selected?.let(onPick) }, enabled = selected != null, modifier = Modifier.testTag("invite_confirm")) {
+                Button(onClick = { selected?.let(onPick) }, enabled = selected != null, modifier = Modifier.exposeTags().testTag("invite_confirm")) {
                     Text("Пригласить")
                 }
             }

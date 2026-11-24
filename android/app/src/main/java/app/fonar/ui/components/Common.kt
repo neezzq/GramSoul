@@ -33,6 +33,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -164,6 +166,11 @@ fun Field(
         ),
     )
 }
+
+/** Dialogs and popups are separate windows: expose test tags there too (UI automation, accessibility tools). */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+fun Modifier.exposeTags(): Modifier =
+    this.then(Modifier.semantics { testTagsAsResourceId = true })
 
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {

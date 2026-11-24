@@ -95,6 +95,7 @@ import app.fonar.ui.components.Avatar
 import app.fonar.ui.components.CenterLoading
 import app.fonar.ui.components.ErrorBox
 import app.fonar.ui.components.actionText
+import app.fonar.ui.components.exposeTags
 import app.fonar.ui.home.FriendPickerDialog
 import app.fonar.ui.theme.Fonar
 import app.fonar.ui.theme.NarratorStyle
@@ -168,7 +169,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                                 DropdownMenuItem(text = { Text("Место сцены") }, onClick = { menu = false; showScene = true })
                             }
                             DropdownMenuItem(text = { Text("Что видит ИИ") }, onClick = { menu = false; vm.loadLastPrompt() },
-                                modifier = Modifier.testTag("menu_prompt"))
+                                modifier = Modifier.exposeTags().testTag("menu_prompt"))
                             DropdownMenuItem(
                                 text = { Text(if (room?.my_role == "owner") "Удалить сцену" else "Выйти из сцены", color = Fonar.Error) },
                                 onClick = { menu = false; confirmLeave = true },
@@ -253,7 +254,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
             onDismissRequest = { vm.clearLastPrompt() },
             title = { Text("Последний запрос к модели") },
             text = {
-                Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                Column(Modifier.exposeTags().heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
                     Text("${p.model ?: ""} · ${p.status}" + (p.stats?.total_ms?.let { " · ${it / 1000} с" } ?: ""),
                         color = Fonar.Muted, style = MaterialTheme.typography.labelSmall)
                     Spacer(Modifier.height(8.dp))

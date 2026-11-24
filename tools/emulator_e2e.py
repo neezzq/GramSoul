@@ -52,6 +52,7 @@ class Node:
         x1, y1, x2, y2 = map(int, m)
         self.cx, self.cy = (x1 + x2) // 2, (y1 + y2) // 2
         self.y1, self.y2 = y1, y2
+        self.pkg = el.get("package", "")
 
 
 def dump_root(dev):
@@ -97,13 +98,32 @@ def find(nodes, rid=None, text=None):
     return None
 
 
+def dismiss_system_dialogs(dev, nodes) -> bool:
+    """Close "System UI isn't responding" / ANR dialogs that slow CI emulators show."""
+    for n in nodes:
+        if n.rid in ("android:id/aerr_wait", "android:id/aerr_close") or n.text in ("Wait", "Подождать"):
+            tap(dev, n)
+            return True
+    return False
+
+
+def ensure_app(dev, nodes) -> None:
+    if nodes and not any(n.pkg == PKG for n in nodes):
+        if not dismiss_system_dialogs(dev, nodes):
+            launch(dev)
+
+
 def wait(dev, rid=None, text=None, timeout=60, name=None):
     end = time.time() + timeout
+    last_fix = time.time()
     while time.time() < end:
         nodes = dump(dev)
         n = find(nodes, rid, text)
         if n:
             return n
+        if time.time() - last_fix > 12:
+            ensure_app(dev, nodes)
+            last_fix = time.time()
         time.sleep(1)
     shot(dev, f"timeout_{name or rid or 'text'}")
     raise TimeoutError(f"{dev}: waited for rid={rid} text={text}")
@@ -164,8 +184,8 @@ def shot(dev, name):
 
 
 def launch(dev):
-    adb(dev, "shell", "monkey", "-p", PKG, "-c", "android.intent.category.LAUNCHER", "1")
-    time.sleep(3)
+    adb(dev, "shell", "am", "start", "-W", "-n", f"{PKG}/app.fonar.MainActivity", check=False, timeout=120)
+    time.sleep(2)
 
 
 def narrator_texts(nodes):
@@ -213,6 +233,8 @@ def main():
         adb(d, "install", "-r", args.apk, timeout=300)
         for k in ("window_animation_scale", "transition_animation_scale", "animator_duration_scale"):
             adb(d, "shell", "settings", "put", "global", k, "0")
+        adb(d, "shell", "input", "keyevent", "82", check=False)  # unlock
+        dismiss_system_dialogs(d, dump(d))
         launch(d)
 
     # 1. registration on two clean installs
