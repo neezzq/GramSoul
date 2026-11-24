@@ -168,7 +168,8 @@ class TwoPlayerUiTest {
         val other = RemotePlayer(backend, uniq("Kira"))
         ActivityScenario.launch(MainActivity::class.java).use {
             compose.waitTag("app_version")  // version on the login screen
-            register(uniq("Mira"))
+            val me = uniq("Mira")
+            register(me)
             compose.onNodeWithTag("tab_characters").performClick()
             compose.waitTag("persona_card_Вера Солнцева")
             shot("20_personas")
@@ -182,6 +183,9 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("avatar_tile").performClick()
             compose.waitTag("avatar_dialog")
             compose.onNodeWithTag("style_manhwa", useUnmergedTree = true).performClick()
+            compose.waitForIdle()
+            compose.onNodeWithText("Манхва", useUnmergedTree = true).assertExists()
+            shot("21a_avatar_styles")
             compose.onNodeWithTag("avatar_generate", useUnmergedTree = true).performClick()
             compose.waitTag("avatar_result")
             shot("21_avatar_ai")
@@ -194,7 +198,7 @@ class TwoPlayerUiTest {
             compose.waitText("Твой персонаж")
             shot("23_persona_view")
             // another player finds the published character by name, without the hidden fields
-            val seen = other.call { personas("ветта") }.personas.single()
+            val seen = other.call { personas("ветта") }.personas.single { it.author?.nick == me }
             assertEquals("Ветта", seen.name)
             assertTrue(seen.personality == null && seen.avatar_image_id != null)
             compose.onNodeWithTag("back").performClick()

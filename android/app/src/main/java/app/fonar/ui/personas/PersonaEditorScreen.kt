@@ -6,7 +6,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -87,6 +86,16 @@ private val DEFAULT_STYLES = listOf(
     AvatarStyle("anime", "Аниме"), AvatarStyle("realism", "Реализм"), AvatarStyle("painted", "Нарисованный"),
     AvatarStyle("manhwa", "Манхва"), AvatarStyle("sketch", "Ч/б рисунок"),
 )
+
+/** Preview pictures generated with our own style prompts (res/drawable-nodpi/style_*.jpg). */
+private fun stylePreview(id: String): Int? = when (id) {
+    "anime" -> app.fonar.R.drawable.style_anime
+    "realism" -> app.fonar.R.drawable.style_realism
+    "painted" -> app.fonar.R.drawable.style_painted
+    "manhwa" -> app.fonar.R.drawable.style_manhwa
+    "sketch" -> app.fonar.R.drawable.style_sketch
+    else -> null
+}
 
 private fun styleBrush(id: String): Brush = Brush.linearGradient(
     when (id) {
@@ -386,22 +395,35 @@ private fun AvatarDialog(
                         Field("Опишите внешность", desc, { desc = it }, minLines = 3, maxLines = 6, maxLength = 1500,
                             hint = "Волосы, глаза, одежда, настроение…", testTag = "avatar_desc")
                         Text("Стиль", fontWeight = FontWeight.SemiBold)
-                        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            styles.forEach { st ->
-                                val selected = st.id == style
-                                Column(
-                                    Modifier.width(84.dp).clip(RoundedCornerShape(14.dp)).clickable { style = st.id }
-                                        .testTag("style_${st.id}"),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                ) {
-                                    Box(
-                                        Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(14.dp)).background(styleBrush(st.id))
-                                            .border(if (selected) 3.dp else 1.dp, if (selected) Fonar.Lamp else Fonar.SurfaceHigher,
-                                                RoundedCornerShape(14.dp)),
-                                    )
-                                    Text(st.label, style = MaterialTheme.typography.labelMedium,
-                                        color = if (selected) Fonar.Lamp else Fonar.Muted, modifier = Modifier.padding(top = 4.dp))
+                        // all five visible at once: 3 + 2
+                        styles.chunked(3).forEach { row ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                row.forEach { st ->
+                                    val selected = st.id == style
+                                    Column(
+                                        Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).clickable { style = st.id }
+                                            .testTag("style_${st.id}"),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                    ) {
+                                        Box(
+                                            Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(14.dp)).background(styleBrush(st.id))
+                                                .border(if (selected) 3.dp else 1.dp, if (selected) Fonar.Lamp else Fonar.SurfaceHigher,
+                                                    RoundedCornerShape(14.dp)),
+                                        ) {
+                                            stylePreview(st.id)?.let { res ->
+                                                androidx.compose.foundation.Image(
+                                                    androidx.compose.ui.res.painterResource(res), contentDescription = st.label,
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)),
+                                                )
+                                            }
+                                        }
+                                        Text(st.label, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                            color = if (selected) Fonar.Lamp else Fonar.Muted, modifier = Modifier.padding(top = 4.dp))
+                                    }
                                 }
+                                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                             }
                         }
                         Button(onClick = { generate() }, enabled = !busy && desc.trim().length >= 5,
