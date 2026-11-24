@@ -9,6 +9,10 @@
 # Safe to run again: it updates the code and keeps data and settings.
 set -euo pipefail
 
+# Everything runs inside main(): with `curl | bash` the whole script is read before
+# any command (docker exec, apt) could swallow the rest of it from stdin.
+main() {
+
 REPO_URL="${REPO_URL:-https://github.com/neezzq/GramSoul.git}"
 BRANCH="${BRANCH:-}"
 DIR="${FONAR_DIR:-/opt/fonar}"
@@ -53,10 +57,13 @@ fi
 # 2 GB RAM: a swap file keeps the model + build from being OOM-killed
 if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
   log "Создаю swap 2 ГБ"
-  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
-  chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
-  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  sysctl -w vm.swappiness=10 >/dev/null; echo 'vm.swappiness=10' > /etc/sysctl.d/99-fonar.conf
+  if { fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; } \
+     && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sysctl -w vm.swappiness=10 >/dev/null || true; echo 'vm.swappiness=10' > /etc/sysctl.d/99-fonar.conf
+  else
+    rm -f /swapfile; echo "swap недоступен на этом VPS — продолжаю без него"
+  fi
 fi
 
 log "Код проекта"
@@ -136,3 +143,6 @@ cat <<EOF
  Бэкап вручную:          bash $DIR/deploy/backup.sh
 ========================================================
 EOF
+}
+
+main "$@" </dev/null
