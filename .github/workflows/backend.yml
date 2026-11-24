@@ -41,5 +41,5 @@ jobs:
       - name: Two-player end-to-end with the live model (1 CPU thread, like the VPS)
         run: python3 server/tests/e2e_live.py http://127.0.0.1:8000
       - name: API log
-        if: always()
-        run: tail -n 200 /tmp/api.log
+        if: failure()
+        run: grep -v "GET /v1/rooms/.*/sync" /tmp/api.log | tail -n 40
