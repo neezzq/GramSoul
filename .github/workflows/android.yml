@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Version
-        # first hand-built release was versionCode 100; CI builds always go above it
+        # hand-built release 1.0.1 is versionCode 101; CI builds (run_number + 100, run_number >= 3) go above it
         run: |
           echo "FONAR_VERSION_CODE=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
           echo "FONAR_VERSION_NAME=1.0.$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
