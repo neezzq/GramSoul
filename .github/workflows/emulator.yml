@@ -107,4 +107,6 @@ jobs:
         if: failure()
         run: |
           tail -n 25 /tmp/emu-A.log /tmp/emu-B.log 2>/dev/null || true
-          tail -n 30 /tmp/api.log 2>/dev/null || true
+          grep -v -e "/sync?" -e "/inbox/wait" /tmp/api.log 2>/dev/null | tail -n 80 || true
+          tail -n 20 /tmp/mock.log 2>/dev/null || true
+          docker logs --tail 30 ollama 2>&1 || true

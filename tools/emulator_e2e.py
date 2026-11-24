@@ -126,6 +126,7 @@ def wait(dev, rid=None, text=None, timeout=60, name=None):
             last_fix = time.time()
         time.sleep(1)
     shot(dev, f"timeout_{name or rid or 'text'}")
+    print_screen(dev, nodes)
     raise TimeoutError(f"{dev}: waited for rid={rid} text={text}")
 
 
@@ -137,7 +138,17 @@ def wait_cond(dev, cond, timeout=600, label="cond"):
             return nodes
         time.sleep(2)
     shot(dev, f"timeout_{label}")
+    print_screen(dev, nodes)
     raise TimeoutError(f"{dev}: {label}")
+
+
+def print_screen(dev, nodes=None) -> None:
+    """Log what was on screen when a wait failed (CI artifacts are not always reachable)."""
+    nodes = nodes if nodes is not None else dump(dev)
+    print(f"--- screen of {dev} ---", flush=True)
+    for n in nodes:
+        if n.text or (n.rid and not n.rid.startswith("android:")):
+            print(f"  [{n.rid}] {'' if n.enabled else '(disabled) '}{n.text or n.desc}"[:200], flush=True)
 
 
 def tap(dev, node):
