@@ -45,8 +45,13 @@ jobs:
           SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
           [ -x "$SDKM" ] || SDKM="$(ls -d $SDK/cmdline-tools/*/bin/sdkmanager | tail -1)"
           AVDM="$(dirname "$SDKM")/avdmanager"
+          export ANDROID_USER_HOME="$HOME/.android"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME" >> "$GITHUB_ENV"
           yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" --install "emulator" "platform-tools" "system-images;android-34;google_apis;x86_64" > /tmp/sdk.log 2>&1 || { tail -20 /tmp/sdk.log; exit 1; }
+          "$SDKM" --install "emulator" "platform-tools" "system-images;android-34;google_apis;x86_64" > /tmp/sdk.log 2>&1 || { tail -n 20 /tmp/sdk.log; exit 1; }
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/emulator" >> "$GITHUB_PATH"
           export PATH="$SDK/platform-tools:$SDK/emulator:$PATH"
@@ -54,17 +59,22 @@ jobs:
           for n in A B; do
             echo no | "$AVDM" create avd -n phone$n -k "system-images;android-34;google_apis;x86_64" -d pixel_5 --force
           done
+          emulator -list-avds
+          ls -la "$ANDROID_AVD_HOME"
           adb start-server
           nohup emulator -avd phoneA -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048 -cores 2 -camera-back none -camera-front none > /tmp/emu-A.log 2>&1 &
+          PID_A=$!
           sleep 20
           nohup emulator -avd phoneB -port 5556 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -memory 2048 -cores 2 -camera-back none -camera-front none > /tmp/emu-B.log 2>&1 &
+          PID_B=$!
           for d in emulator-5554 emulator-5556; do
             ok=0
             for i in $(seq 1 120); do
               if [ "$(adb -s $d shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then ok=1; break; fi
+              if ! kill -0 $PID_A 2>/dev/null || ! kill -0 $PID_B 2>/dev/null; then echo "::error::emulator process exited"; break; fi
               sleep 5
             done
-            if [ $ok != 1 ]; then echo "::error::$d did not boot"; tail -30 /tmp/emu-A.log /tmp/emu-B.log; adb devices; exit 1; fi
+            if [ $ok != 1 ]; then echo "::error::$d did not boot"; tail -n 30 /tmp/emu-A.log /tmp/emu-B.log; adb devices; exit 1; fi
             adb -s $d shell input keyevent 82 || true
           done
           adb devices
