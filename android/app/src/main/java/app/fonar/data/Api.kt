@@ -98,6 +98,8 @@ class Api(
                 detail?.code ?: "http_${r.code}",
                 detail?.message ?: when (r.code) {
                     429 -> "Слишком часто. Подожди немного."
+                    // a route this server does not know yet: the app is newer than the backend
+                    404, 405 -> "Сервер ещё не обновлён до этой версии приложения. Попроси владельца сервера запустить update.sh."
                     in 500..599 -> "Сервер временно недоступен. Попробуй ещё раз."
                     else -> "Ошибка ${r.code}"
                 },
