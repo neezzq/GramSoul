@@ -42,8 +42,11 @@ def rnd(n=5) -> str:
 c = httpx.Client(base_url=BASE, timeout=60)
 
 
+PASSWORD = "e2e-" + rnd(8)
+
+
 def reg(nick):
-    r = c.post("/v1/register", json={"nick": nick})
+    r = c.post("/v1/register", json={"nick": nick, "password": PASSWORD})
     assert r.status_code == 201, r.text
     d = r.json()
     return {"Authorization": "Bearer " + d["token"]}, d
@@ -80,19 +83,26 @@ def main():
     print(f"Backend: {BASE}")
     h = c.get("/v1/health").json()
     check("health", h.get("ok") is True, json.dumps(h, ensure_ascii=False))
-    check("model loaded in Ollama", h.get("model_ready") is True, h.get("model", ""))
+    if h.get("local_ai"):
+        check("model loaded in Ollama", h.get("model_ready") is True, h.get("model", ""))
+    else:
+        check("cloud AI configured", h.get("cloud") is True, h.get("cloud_model", ""))
 
     suffix = rnd(4)
     nick_a, nick_b, nick_c = f"Mira_{suffix}", f"Лев_{suffix}", f"eve_{suffix}"
     ha, a = reg(nick_a)
     hb, b = reg(nick_b)
     hc, cc = reg(nick_c)
-    check("two independent registrations by nick only", bool(a["token"] and b["token"]) and a["token"] != b["token"])
+    check("two independent registrations by nick + password", bool(a["token"] and b["token"]) and a["token"] != b["token"])
     r = c.post("/v1/register", json={"nick": nick_a.upper()})
     check("taken nick (other case) is refused and gives no token", r.status_code == 409 and "token" not in r.text,
           r.json()["detail"]["message"])
     r = c.post("/v1/login", json={"nick": nick_a})
-    check("no login-by-nick endpoint", r.status_code in (404, 405), str(r.status_code))
+    check("no login by nick alone", r.status_code in (400, 404, 405, 422) and "token" not in r.text, str(r.status_code))
+    r = c.post("/v1/login", json={"nick": nick_a, "password": PASSWORD + "x"})
+    check("wrong password is refused", r.status_code == 400 and "token" not in r.text)
+    r = c.post("/v1/login", json={"nick": nick_a.lower(), "password": PASSWORD})
+    check("login with nick + password", r.status_code == 201 and r.json()["user"]["id"] == a["user"]["id"])
 
     r = c.get("/v1/users/search", params={"nick": nick_b.lower()}, headers=ha)
     check("find friend by full nick", r.status_code == 200 and r.json()["user"]["nick"] == nick_b)

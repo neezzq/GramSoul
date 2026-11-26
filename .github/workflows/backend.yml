@@ -2,7 +2,7 @@ name: Backend
 
 on:
   push:
-    paths: ["server/**", "deploy/**", ".github/workflows/backend.yml"]
+    paths: ["server/**", "deploy/**", "tools/mock_openrouter.py", ".github/workflows/backend.yml"]
   workflow_dispatch:
 
 jobs:
@@ -18,28 +18,27 @@ jobs:
           pip install -q -r requirements-dev.txt
           pytest -q
 
-  live-model:
-    # Real Ollama + qwen2.5:0.5b, two simulated players, third-account checks, timings.
+  two-players:
+    # Two simulated players and a third account through the real HTTP API; the AI is a local
+    # stand-in for OpenRouter (streaming SSE, images), so no key is needed.
     runs-on: ubuntu-latest
     needs: test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: Start Ollama and pull the model
+      - name: Start a mock OpenRouter and the API
         run: |
-          docker run -d --name ollama -p 11434:11434 -e OLLAMA_NUM_PARALLEL=1 ollama/ollama:0.40.17
-          for i in $(seq 1 30); do curl -fs localhost:11434/api/tags >/dev/null && break; sleep 2; done
-          docker exec ollama ollama pull qwen2.5:0.5b
-      - name: Start API
-        working-directory: server
-        run: |
-          pip install -q -r requirements.txt pillow
+          pip install -q -r server/requirements.txt
+          nohup python3 tools/mock_openrouter.py 9009 > /tmp/mock.log 2>&1 &
           mkdir -p /tmp/data
-          DATA_DIR=/tmp/data OLLAMA_URL=http://127.0.0.1:11434 LLM_NUM_THREAD=1 nohup uvicorn app.main:app --port 8000 > /tmp/api.log 2>&1 &
+          (cd server && DATA_DIR=/tmp/data OPENROUTER_API_KEY=sk-or-mock OPENROUTER_BASE_URL=http://127.0.0.1:9009/api/v1 \
+             nohup uvicorn app.main:app --port 8000 > /tmp/api.log 2>&1 &)
           for i in $(seq 1 30); do curl -fs localhost:8000/v1/health && break; sleep 1; done
-      - name: Two-player end-to-end with the live model (1 CPU thread, like the VPS)
-        run: python3 server/tests/e2e_live.py http://127.0.0.1:8000
+      - name: Two-player end-to-end
+        run: python3 server/tests/e2e_live.py http://127.0.0.1:8000 120
       - name: API log
         if: failure()
-        run: grep -v "GET /v1/rooms/.*/sync" /tmp/api.log | tail -n 40
+        run: |
+          grep -v "GET /v1/rooms/.*/sync" /tmp/api.log | tail -n 40
+          tail -n 20 /tmp/mock.log

@@ -298,7 +298,9 @@ def main():
 
     # 1. registration with nick + password on two clean installs
     def fill_password(d):
+        # the keyboard would cover the lower field: hide it before each tap
         for rid in ("password_input", "password2_input"):
+            hide_keyboard(d)
             tap_id(d, rid)
             type_text(d, PASSWORD)
         hide_keyboard(d)

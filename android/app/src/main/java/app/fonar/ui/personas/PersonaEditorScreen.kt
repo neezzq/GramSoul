@@ -393,8 +393,9 @@ private fun AvatarDialog(
                         OutlinedButton(onClick = { result = null; generate() }, enabled = !busy,
                             modifier = Modifier.fillMaxWidth().testTag("avatar_again")) { Text("Сгенерировать заново") }
                     } else {
-                        Field("Опишите внешность", desc, { desc = it }, minLines = 3, maxLines = 6, maxLength = 1500,
-                            hint = "Волосы, глаза, одежда, настроение…", testTag = "avatar_desc")
+                        Field("Внешность или кто это (необязательно)", desc, { desc = it }, minLines = 3, maxLines = 6, maxLength = 1500,
+                            hint = "Волосы, глаза, одежда… или просто: Лелуш Ви Британия из аниме «Код Гиасс». Пусто — нарисую по имени.",
+                            testTag = "avatar_desc")
                         Text("Стиль", fontWeight = FontWeight.SemiBold)
                         // all five visible at once: 3 + 2
                         styles.chunked(3).forEach { row ->
@@ -427,7 +428,7 @@ private fun AvatarDialog(
                                 repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                             }
                         }
-                        Button(onClick = { generate() }, enabled = !busy && desc.trim().length >= 5,
+                        Button(onClick = { generate() }, enabled = !busy && (desc.trim().ifEmpty { name.trim() }).length >= 2,
                             modifier = Modifier.fillMaxWidth().testTag("avatar_generate")) {
                             if (busy) {
                                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Fonar.OnLamp)

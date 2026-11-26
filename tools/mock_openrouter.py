@@ -10,11 +10,18 @@ from __future__ import annotations
 import base64
 import io
 import itertools
+import random
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 COUNTER = itertools.count(1)
+PLACES = ["Туман за окнами отступает, линза отражает далёкие огни", "Где-то внизу хлопает ставня, ветер несёт соль",
+          "Лампа мигает, по стенам ползут длинные тени", "С моря доносится гудок, ступени скрипят под ногами",
+          "Дождь стучит по стеклу, в углу тлеют угли", "Над водой встаёт луна, маяк медленно поворачивает луч"]
+ACTIONS = ["улыбается и поправляет косу", "щурится на огонь", "постукивает пальцами по перилам",
+           "отводит взгляд к окну", "прячет руки в рукава", "наклоняется ближе"]
+WORDS = ["маяк", "шторм", "письмо", "ключ", "чайки", "компас", "карта", "фонарь", "якорь", "песня", "тайна", "берег"]
 
 
 def png(text: str) -> bytes:
@@ -58,9 +65,14 @@ class H(BaseHTTPRequestHandler):
                                                               "images": [{"type": "image_url", "image_url": {"url": url}}]}}]})
         system = body["messages"][0]["content"]
         summary = system.startswith("Ты кратко пересказываешь")
+        # every reply is different (like a real model): the server drops replies that repeat earlier ones
+        rnd = random.Random(n)
+        place = rnd.choice(PLACES)
+        act = rnd.choice(ACTIONS)
+        words = " ".join(rnd.sample(WORDS, 4))
         text = (f"Краткое содержание {n}: герои были у маяка." if summary else
-                f"Рассказчик: Туман за окнами отступает, линза отражает далёкие огни (OBLAKO {n}).\n"
-                f"Ива: *улыбается и поправляет косу* Облачный ответ номер {n}. Пойдём дальше?")
+                f"Рассказчик: {place} (OBLAKO {n}).\n"
+                f"Ива: *{act}* Облачный ответ номер {n}: {words}?")
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()

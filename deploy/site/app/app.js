@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.1';
+const WEB_VERSION = '1.2';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -635,7 +635,7 @@ function avatarSheet(name, description, onUse) {
   const s = sheet('AI-аватар', body);
   s.el.id = 'avatar-sheet';
   const showMain = () => {
-    const desc = autoGrow(h('textarea', { class: 'field', id: 'avatar-desc', rows: 3, placeholder: 'Волосы, глаза, одежда, настроение…' }), 160);
+    const desc = autoGrow(h('textarea', { class: 'field', id: 'avatar-desc', rows: 3, placeholder: 'Волосы, глаза, одежда… или: Лелуш Ви Британия из аниме «Код Гиасс». Пусто — по имени.' }), 160);
     desc.value = (description || '').slice(0, 400);
     const grid = h('div', { class: 'styles' });
     const draw = () => grid.replaceChildren(...STYLES.map(([sid, label]) =>
@@ -645,7 +645,8 @@ function avatarSheet(name, description, onUse) {
     const err = h('div', { class: 'error' });
     const gen = h('button', { class: 'btn primary wide', id: 'avatar-generate', style: 'margin-top:14px' }, 'Сгенерировать');
     gen.addEventListener('click', async () => {
-      if (desc.value.trim().length < 5) { err.textContent = 'Опиши внешность подробнее.'; return; }
+      // the description is optional: the name of a known character is enough
+      if ((desc.value.trim() || (name || '').trim()).length < 2) { err.textContent = 'Напиши имя персонажа или опиши внешность.'; return; }
       gen.disabled = true;
       gen.textContent = 'Рисую… 10–30 с';
       try {
@@ -665,7 +666,7 @@ function avatarSheet(name, description, onUse) {
       upload.textContent = 'Загружаю…';
       try { const r = await uploadImage(f, 1024); onUse(r.id); s.close(); } catch (e) { err.textContent = e.message; upload.disabled = false; upload.textContent = 'Загрузить из галереи'; }
     });
-    fill(body, h('label', { class: 'lbl' }, 'Опишите внешность'), desc, h('label', { class: 'lbl' }, 'Стиль'), grid, err, gen, upload);
+    fill(body, h('label', { class: 'lbl' }, 'Внешность или кто это (необязательно)'), desc, h('label', { class: 'lbl' }, 'Стиль'), grid, err, gen, upload);
   };
   const showResult = (iid, desc) => {
     description = desc;
