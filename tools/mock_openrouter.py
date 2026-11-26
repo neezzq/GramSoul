@@ -78,9 +78,10 @@ class H(BaseHTTPRequestHandler):
         place = rnd.choice(PLACES)
         act = rnd.choice(ACTIONS)
         words = " ".join(rnd.sample(WORDS, 4))
+        detail = " и ".join(rnd.sample(WORDS, 2))
         text = (f"Краткое содержание {n}: герои были у маяка." if summary else
-                f"Рассказчик: {place} (OBLAKO {n}).\n"
-                f"Ива: *{act}* Облачный ответ номер {n}: {words}?")
+                f"Рассказчик: {place}; где-то рядом {detail} (OBLAKO {n}).\n"
+                f"Ива: *{act}* Облачный ответ номер {n} (OBLAKO): {words}?")
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
