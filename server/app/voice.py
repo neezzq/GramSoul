@@ -150,7 +150,16 @@ def _error_text(r: httpx.Response) -> str:
         msg = (r.json().get("error") or {}).get("message") or r.text
     except Exception:
         msg = r.text
-    return " ".join(str(msg).split())[:200]
+    msg = " ".join(str(msg).split())
+    low = msg.lower()
+    # «0 endpoints … guardrail restrictions and data policy. We removed them for the following reasons: …»
+    if "zdr" in low:
+        return ("OpenRouter не пускает к модели озвучки: в настройках аккаунта включён режим Zero Data Retention "
+                "(openrouter.ai/settings/privacy) — у этой модели нет провайдера без хранения данных")
+    if "guardrail" in low or "data policy" in low:
+        reasons = re.sub(r"^\s*\(an endpoint may have matched multiple reasons\)\s*:?\s*", "", msg.split("reasons", 1)[-1])
+        return "OpenRouter не пускает к модели озвучки из-за настроек приватности или ограничений ключа: " + reasons[:220]
+    return msg[:220]
 
 
 async def _speech_models(client: httpx.AsyncClient, base: str, headers: dict) -> list[dict]:
@@ -232,7 +241,7 @@ async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
     if r.status_code == 429:
         raise ApiError(429, "voice_busy", "Сервис озвучки занят. Попробуй через минуту.")
     if r.status_code >= 400:
-        log.warning("tts %s: %s", r.status_code, r.text[:300])
+        log.warning("tts %s: %s", r.status_code, r.text[:1200])
         raise ApiError(502, "voice_failed", f"Озвучка не получилась: {_error_text(r)} (ошибка {r.status_code}).")
     ctype = r.headers.get("content-type", "")
     if "json" in ctype or len(r.content) < 200:
