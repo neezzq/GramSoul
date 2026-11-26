@@ -199,15 +199,6 @@ class HomeViewModel(private val g: AppGraph) : ViewModel() {
         _state.update { it.copy(drafts = g.drafts.newStoryDrafts()) }
     }
 
-    fun restoreDemo() {
-        viewModelScope.launch {
-            try {
-                g.api.demoStory(); refresh()
-            } catch (e: Exception) {
-                _state.update { it.copy(message = err(e)) }
-            }
-        }
-    }
 
     fun leaveRoom(id: String) {
         viewModelScope.launch {

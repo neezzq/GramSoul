@@ -275,6 +275,9 @@ MIGRATIONS = [
     # what an image is for: '' (avatars, covers, AI pictures) or 'chat' (a player's own photo, kept 7 days)
     ("images", "purpose", "ALTER TABLE images ADD COLUMN purpose TEXT NOT NULL DEFAULT ''"),
     ("images", "expires_at", "ALTER TABLE images ADD COLUMN expires_at INTEGER"),
+    # per-chat picture settings: the style of scene pictures and a fixed description of the scenes
+    ("rooms", "image_style", "ALTER TABLE rooms ADD COLUMN image_style TEXT NOT NULL DEFAULT 'aesthetic'"),
+    ("rooms", "image_notes", "ALTER TABLE rooms ADD COLUMN image_notes TEXT NOT NULL DEFAULT ''"),
 ]
 
 

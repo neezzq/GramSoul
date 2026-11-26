@@ -4,7 +4,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -147,8 +151,26 @@ fun ProfileScreen(nav: NavHostController) {
                     enabled = !busy, modifier = Modifier.testTag("avatar_remove"),
                 ) { Text("Убрать", color = Fonar.Muted) }
             }
-            Text(u?.nick ?: "", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.testTag("profile_nick"))
+            var editNick by remember { mutableStateOf(false) }
+            androidx.compose.animation.AnimatedContent(editNick && u != null, label = "nick",
+                transitionSpec = { androidx.compose.animation.fadeIn(tween(200)) togetherWith androidx.compose.animation.fadeOut(tween(150)) }) { editing ->
+                if (editing && u != null) {
+                    NickEditor(u.nick, onDone = { nu ->
+                        me = nu
+                        graph.onNickChanged(nu)
+                        editNick = false
+                        message = "Ник изменён"
+                    }, onCancel = { editNick = false })
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(u?.nick ?: "", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.testTag("profile_nick"))
+                        IconButton(onClick = { editNick = true }, enabled = u != null, modifier = Modifier.testTag("nick_edit")) {
+                            Icon(androidx.compose.material.icons.Icons.Outlined.Edit, "Изменить ник", tint = Fonar.Muted)
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(20.dp))
             OutlinedTextField(
                 value = about,
@@ -414,5 +436,44 @@ private fun MyStuff(nav: NavHostController, onMessage: (String) -> Unit) {
                 try { a.action(); load() } catch (e: Exception) { onMessage(errText(e)) }
             }
         }, onNo = { ask = null })
+    }
+}
+
+
+/** A new nick, edited in place: same rules as at registration; the server checks that it is free. */
+@Composable
+private fun NickEditor(current: String, onDone: (UserDto) -> Unit, onCancel: () -> Unit) {
+    val graph = LocalContext.current.graph
+    val scope = rememberCoroutineScope()
+    var nick by rememberSaveable { mutableStateOf(current) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val local = app.fonar.ui.register.localNickError(nick)
+    val ready = !busy && nick.trim().isNotEmpty() && local == null && nick.trim() != current
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        OutlinedTextField(
+            value = nick, onValueChange = { if (it.length <= 24) { nick = it; error = null } },
+            label = { Text("Новый ник") },
+            singleLine = true, isError = local != null || error != null,
+            supportingText = { Text(local ?: error ?: "Друзья увидят его сразу; входить нужно будет по нему") },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(autoCorrectEnabled = false),
+            colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
+            modifier = Modifier.fillMaxWidth().testTag("nick_new_input"),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onCancel, enabled = !busy, modifier = Modifier.weight(1f)) { Text("Отмена") }
+            Button(onClick = {
+                busy = true
+                scope.launch {
+                    try {
+                        onDone(graph.api.setNick(nick.trim()).user)
+                    } catch (e: Exception) {
+                        error = errText(e)
+                    } finally {
+                        busy = false
+                    }
+                }
+            }, enabled = ready, modifier = Modifier.weight(1f).testTag("nick_save")) { Text("Сохранить") }
+        }
     }
 }

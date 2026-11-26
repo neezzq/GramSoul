@@ -13,7 +13,7 @@ from .common import hub, new_id
 from .config import settings
 from .db import Database, now_ms
 from .images import process_image, read_image, save_image
-from . import usage
+from . import personas as PS, usage
 from .rooms import _append, _bump, _notify_room, expire_chat_photos, room_personas, seats_of
 
 log = logging.getLogger("fonar.worker")
@@ -350,8 +350,18 @@ class Worker:
                     "ORDER BY position LIMIT 3", (room["story_id"], *names))]
             title, world, history = story["title"], story["world_rules"], inp.history
         refs = [b for b in (read_image(i) for i in avatar_ids[:3]) if b]
+        n_portraits = len(refs)
+        # the previous picture of this chat keeps the place and the people the same
+        last = None
+        if not job["user_prompt"].strip():
+            prev = db.one("SELECT image_id FROM messages WHERE room_id=? AND kind='narrator' AND image_id IS NOT NULL "
+                          "AND hidden=0 ORDER BY seq DESC LIMIT 1", (room["id"],))
+            last = read_image(prev["image_id"]) if prev else None
+        if last:
+            refs.append(last)
         prompt = P.image_prompt(title, world, room["scene_location"], in_frame, history, job["user_prompt"],
-                                with_references=bool(refs))
+                                with_references=bool(refs), style=PS.scene_style_prompt(room["image_style"]),
+                                notes=room["image_notes"] or "", portraits=n_portraits, last_scene=bool(last))
         with db.tx():
             db.run("UPDATE image_jobs SET status='running', model=?, prompt=? WHERE id=?",
                    (settings.cloud_image_model, prompt, job["id"]))

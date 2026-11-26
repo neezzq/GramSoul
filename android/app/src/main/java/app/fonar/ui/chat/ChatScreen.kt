@@ -5,6 +5,12 @@ import androidx.compose.foundation.clickable
 import app.fonar.ui.components.glow
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -202,6 +208,8 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                                 DropdownMenuItem(text = { Text("Место сцены") }, onClick = { menu = false; showScene = true })
                             }
                             if (room?.images_available == true) {
+                                DropdownMenuItem(text = { Text("Стиль и описание картинок") }, onClick = { menu = false; nav.navigate(Routes.roomImages(roomId)) },
+                                    modifier = Modifier.exposeTags().testTag("menu_image_settings"))
                                 DropdownMenuItem(text = { Text("Нарисовать по описанию") }, onClick = { menu = false; showPhoto = true; editing = null },
                                     modifier = Modifier.exposeTags().testTag("menu_photo_custom"))
                             }
@@ -242,16 +250,21 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    // new lines fade and slide in; the rest moves smoothly
                     items(s.messages, key = { it.id }) { m ->
-                        if (m.image_id != null && m.kind != "player") {
-                            PhotoMessage(m, graph.api.roomImageUrl(roomId, m.image_id)) { fullImage = it }
-                        } else {
-                            MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard,
-                                onLongPress = if (canEdit(m)) ({ editing = m; showPhoto = false }) else null,
-                                onOpenImage = { fullImage = it })
+                        Box(Modifier.animateItem(fadeInSpec = tween(260), placementSpec = tween(260), fadeOutSpec = tween(160))) {
+                            if (m.image_id != null && m.kind != "player") {
+                                PhotoMessage(m, graph.api.roomImageUrl(roomId, m.image_id)) { fullImage = it }
+                            } else {
+                                MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard,
+                                    onLongPress = if (canEdit(m)) ({ editing = m; showPhoto = false }) else null,
+                                    onOpenImage = { fullImage = it })
+                            }
                         }
                     }
-                    items(s.pending, key = { "p" + it.clientId }) { p -> PendingItem(p, vm) }
+                    items(s.pending, key = { "p" + it.clientId }) { p ->
+                        Box(Modifier.animateItem(fadeInSpec = tween(200), placementSpec = tween(220), fadeOutSpec = null)) { PendingItem(p, vm) }
+                    }
                     if (s.uploading > 0) item(key = "upload_status") { StatusRow("Отправляю фото…") }
                     item(key = "photo_status") { PhotoStatus(s) { showPhoto = true } }
                     item(key = "status") { GenerationStatus(s, vm) }
@@ -271,6 +284,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                     photoOpen = showPhoto,
                     onPhoto = { showPhoto = !showPhoto; editing = null },
                     onPhotoNow = { focusManager.clearFocus(); vm.requestPhoto("") },
+                    onImageSettings = { focusManager.clearFocus(); nav.navigate(Routes.roomImages(roomId)) },
                     onUpload = {
                         uploadPicker.launch(androidx.activity.result.PickVisualMediaRequest(
                             androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -519,7 +533,7 @@ private fun Bubble(
     onLongPress: (() -> Unit)? = null,
     paragraphs: Boolean = false,
 ) {
-    Surface(color = color, shape = shape, modifier = Modifier.clip(shape).longPress(onLongPress)) {
+    Surface(color = color, shape = shape, modifier = Modifier.clip(shape).longPress(onLongPress).animateContentSize(tween(200))) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Text(actionText(text, paragraphs = paragraphs), style = MaterialTheme.typography.bodyLarge, color = Fonar.Text)
             if (edited) Text("изменено", style = MaterialTheme.typography.labelSmall, color = Fonar.Faint,
@@ -571,7 +585,7 @@ private fun GenerationStatus(s: ChatState, vm: ChatViewModel) {
             if ((g.queue_position ?: 0) > 0) "Рассказчик ждёт очереди… (перед вами: ${g.queue_position})"
             else "Рассказчик собирается с мыслями…",
         )
-        "running" -> Column(Modifier.fillMaxWidth().testTag("generation_running")) {
+        "running" -> Column(Modifier.fillMaxWidth().animateContentSize(tween(180)).testTag("generation_running")) {
             StatusRow(if (g.kind == "regenerate") "Рассказчик переписывает ответ…" else "Рассказчик пишет…")
             val partial = g.partial?.trim().orEmpty()
             if (partial.isNotEmpty()) {
@@ -615,6 +629,7 @@ private fun Composer(
     onPhoto: () -> Unit,
     onPhotoSubmit: (String) -> Unit,
     onPhotoNow: () -> Unit = {},
+    onImageSettings: () -> Unit = {},
     onUpload: () -> Unit = {},
     onEditLast: (() -> Unit)? = null,
     editing: MessageDto? = null,
@@ -627,7 +642,8 @@ private fun Composer(
     val lastIsAi = s.messages.lastOrNull { it.image_id == null && it.kind != "system" }?.generation_id != null
     val regenerating = active && g?.kind == "regenerate"
     Surface(color = Fonar.Night) {
-        Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp)) {
+        // panels and options slide open and closed instead of jumping
+        Column(Modifier.fillMaxWidth().animateContentSize(tween(220)).padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp)) {
             if (editing != null) EditPanel(editing, onSave = onEditSave, onCancel = onEditCancel)
             else if (photoOpen) PhotoPanel(onSubmit = onPhotoSubmit, onClose = onPhoto)
             val photoBusy = s.imageJob?.status == "queued" || s.imageJob?.status == "running"
@@ -643,19 +659,55 @@ private fun Composer(
                     enabled = !active && !s.actionBusy) { vm.continueScene() }
                 Spacer(Modifier.weight(1f))
                 if (imagesAvailable) {
-                    ToolIcon(Icons.Outlined.PhotoCamera, "Нарисовать текущую сцену", "photo_button",
-                        enabled = !photoBusy && !s.actionBusy, busy = photoBusy,
-                        onLongClick = onPhoto, longClickLabel = "Нарисовать по описанию") { onPhotoNow() }
+                    // a choice: draw what is happening (auto) or by own description; settings of this chat
+                    var cameraMenu by remember { mutableStateOf(false) }
+                    Box {
+                        ToolIcon(Icons.Outlined.PhotoCamera, "Картинка сцены", "photo_button",
+                            enabled = !photoBusy && !s.actionBusy, busy = photoBusy) { cameraMenu = true }
+                        DropdownMenu(expanded = cameraMenu, onDismissRequest = { cameraMenu = false },
+                            containerColor = Fonar.SurfaceHigh, shape = RoundedCornerShape(18.dp)) {
+                            DropdownMenuItem(
+                                text = { MenuLine("Авто — по диалогу", "что происходит сейчас") },
+                                leadingIcon = { Icon(Icons.Outlined.AutoAwesome, null, tint = androidx.compose.ui.graphics.Color.White) },
+                                onClick = { cameraMenu = false; onPhotoNow() },
+                                modifier = Modifier.exposeTags().testTag("photo_auto"),
+                            )
+                            DropdownMenuItem(
+                                text = { MenuLine("По моему описанию", "напиши, что нарисовать") },
+                                leadingIcon = { Icon(Icons.Outlined.Edit, null, tint = androidx.compose.ui.graphics.Color.White) },
+                                onClick = { cameraMenu = false; onPhoto() },
+                                modifier = Modifier.exposeTags().testTag("photo_custom"),
+                            )
+                            DropdownMenuItem(
+                                text = { MenuLine("Стиль и описание сцен", app.fonar.ui.components.styleLabel(s.room?.image_style)) },
+                                leadingIcon = { Icon(Icons.Outlined.Tune, null, tint = androidx.compose.ui.graphics.Color.White) },
+                                onClick = { cameraMenu = false; onImageSettings() },
+                                modifier = Modifier.exposeTags().testTag("photo_settings"),
+                            )
+                        }
+                    }
                 }
                 ToolIcon(Icons.Outlined.AddPhotoAlternate, "Отправить своё фото", "upload_button",
                     enabled = s.uploading == 0, busy = s.uploading > 0) { onUpload() }
             }
             if (s.suggestions.isNotEmpty()) {
                 Column(Modifier.padding(top = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text("Варианты ответа", color = Fonar.Muted, style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.weight(1f).padding(start = 4.dp))
+                        IconButton(onClick = { vm.clearSuggestions() }, modifier = Modifier.size(32.dp).testTag("suggestions_hide")) {
+                            Icon(Icons.Outlined.Close, "Скрыть варианты", tint = androidx.compose.ui.graphics.Color.White,
+                                modifier = Modifier.size(18.dp))
+                        }
+                    }
                     s.suggestions.forEachIndexed { i, sug ->
+                        val shown = remember(sug) { androidx.compose.animation.core.Animatable(0f) }
+                        LaunchedEffect(sug) { kotlinx.coroutines.delay(45L * i); shown.animateTo(1f, tween(240)) }
                         Surface(
                             onClick = { onPickSuggestion(sug) }, color = Fonar.SurfaceHigh, shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth().testTag("suggestion_$i"),
+                            modifier = Modifier.fillMaxWidth()
+                                .graphicsLayer { alpha = shown.value; translationY = (1f - shown.value) * 16f }
+                                .testTag("suggestion_$i"),
                         ) {
                             Text(actionText(sug), style = MaterialTheme.typography.bodyMedium, maxLines = 3,
                                 overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
@@ -711,6 +763,15 @@ private fun Composer(
 }
 
 
+@Composable
+private fun MenuLine(title: String, sub: String) {
+    Column {
+        Text(title, color = Fonar.Text, style = MaterialTheme.typography.bodyLarge)
+        if (sub.isNotBlank()) Text(sub, color = Fonar.Muted, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+    }
+}
+
 /** A small white icon button; dims when unavailable, can also react to a long press. */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -724,9 +785,15 @@ private fun ToolIcon(
     longClickLabel: String? = null,
     onClick: () -> Unit,
 ) {
+    val press = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val pressed by press.collectIsPressedAsState()
+    val scale by androidx.compose.animation.core.animateFloatAsState(if (pressed) 0.86f else 1f, tween(120), label = "press")
+    val alpha by androidx.compose.animation.core.animateFloatAsState(if (enabled) 1f else 0.3f, tween(200), label = "enabled")
     Box(
-        Modifier.size(width = 44.dp, height = 40.dp).clip(RoundedCornerShape(12.dp))
+        Modifier.size(width = 44.dp, height = 40.dp).graphicsLayer { scaleX = scale; scaleY = scale }
+            .clip(RoundedCornerShape(12.dp))
             .combinedClickable(
+                interactionSource = press, indication = androidx.compose.material3.ripple(),
                 enabled = enabled, onClickLabel = label, role = androidx.compose.ui.semantics.Role.Button,
                 onLongClickLabel = longClickLabel, onLongClick = onLongClick, onClick = onClick,
             )
@@ -734,7 +801,7 @@ private fun ToolIcon(
         contentAlignment = Alignment.Center,
     ) {
         if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = androidx.compose.ui.graphics.Color.White)
-        else Icon(icon, label, tint = androidx.compose.ui.graphics.Color.White.copy(alpha = if (enabled) 1f else 0.3f),
+        else Icon(icon, label, tint = androidx.compose.ui.graphics.Color.White.copy(alpha = alpha),
             modifier = Modifier.size(22.dp))
     }
 }

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 
 from pydantic import BaseModel, Field
@@ -16,6 +17,8 @@ from .common import ApiError, User, new_id, not_found
 from .config import settings
 from .db import Database, now_ms
 from .images import process_image, save_image
+
+log = logging.getLogger("fonar.personas")
 
 LIMITS = {"name": 60, "first_message": 5000, "description": 10000, "backstory": 2000, "personality": 2000}
 LABELS = {"name": "Имя", "first_message": "Первое сообщение", "description": "Описание",
@@ -231,22 +234,53 @@ COMMON_NEGATIVE = ("text, watermark, logo, signature, frame, border, extra finge
                    "blurry, low quality, cropped face, multiple people")
 
 AVATAR_STYLES: dict[str, dict] = {
+    # moody "aesthetic" phone-photo look: soft natural light, muted film colours, freckles, tousled hair
+    "aesthetic": {"label": "Эстетика", "prompt":
+                  "aesthetic moody photo, photorealistic, candid close-up like a phone selfie, soft natural light "
+                  "(warm golden sun through a window or cold overcast daylight), muted desaturated film color grading, "
+                  "gentle film grain, shallow depth of field, detailed real skin with freckles, glossy natural lips, "
+                  "tousled messy hair, minimal dark or cream clothes, thin silver jewelry, quiet emotional mood",
+                  "scene":
+                  "aesthetic moody photo, photorealistic, candid intimate framing like a phone photo, soft natural light "
+                  "(warm golden window light or cold overcast daylight), muted desaturated film color grading, gentle "
+                  "film grain, shallow depth of field, detailed real skin with freckles, tousled hair, minimal dark or "
+                  "cream clothes, quiet emotional mood, believable real-life place"},
     "anime": {"label": "Аниме", "prompt":
               "soft anime illustration, delicate clean line art, pastel color palette, hazy dreamy atmosphere, "
-              "detailed flowing hair strands, expressive eyes, gentle bloom lighting, upper-body portrait"},
+              "detailed flowing hair strands, expressive eyes, gentle bloom lighting, upper-body portrait",
+              "scene":
+              "soft anime illustration, clean line art, pastel color palette, dreamy atmosphere, gentle bloom "
+              "lighting, detailed background"},
     "realism": {"label": "Реализм", "prompt":
                 "photorealistic cinematic portrait, ultra detailed skin texture, natural soft lighting, "
-                "shallow depth of field, 85mm lens, close-up, subtle fantasy details, high dynamic range"},
+                "shallow depth of field, 85mm lens, close-up, subtle fantasy details, high dynamic range",
+                "scene":
+                "photorealistic cinematic film still, natural lighting, shallow depth of field, detailed textures, "
+                "high dynamic range"},
     "painted": {"label": "Нарисованный", "prompt":
                 "digital painting, painterly brush strokes, realistic proportions, cinematic dramatic lighting, "
-                "rich colors, atmospheric background with light rays, concept art quality, upper-body portrait"},
+                "rich colors, atmospheric background with light rays, concept art quality, upper-body portrait",
+                "scene":
+                "cinematic digital painting, painterly brush strokes, dramatic lighting, rich colors, atmospheric "
+                "background, concept art quality"},
     "manhwa": {"label": "Манхва", "prompt":
                "black and white manhwa style, sharp ink line art, screentone shading, high contrast, "
-               "dynamic angle, expressive face, comic panel quality, monochrome"},
+               "dynamic angle, expressive face, comic panel quality, monochrome",
+               "scene":
+               "black and white manhwa panel, sharp ink line art, screentone shading, high contrast, dynamic angle, "
+               "monochrome"},
     "sketch": {"label": "Ч/б рисунок", "prompt":
                "monochrome ink and pencil sketch, sepia toned paper texture, fine cross-hatching, "
-               "hand-drawn illustration, soft vintage look, artistic portrait"},
+               "hand-drawn illustration, soft vintage look, artistic portrait",
+               "scene":
+               "monochrome ink and pencil sketch, sepia paper texture, fine cross-hatching, hand-drawn illustration"},
 }
+SCENE_STYLE_DEFAULT = "aesthetic"
+
+
+def scene_style_prompt(style_id: str | None) -> str:
+    return AVATAR_STYLES.get(style_id or "", AVATAR_STYLES[SCENE_STYLE_DEFAULT])["scene"]
+
 
 SUBJECT_SYSTEM = (
     "Convert the character description into one short English sentence describing ONLY visual appearance "
@@ -390,6 +424,10 @@ DEMO = [
 
 
 def seed_demo(d: Database) -> None:
+    """Sample characters exist only with DEMO_CONTENT=on (tests); otherwise they are removed."""
+    if not settings.demo_content:
+        purge_demo(d)
+        return
     if d.one("SELECT 1 FROM personas WHERE is_demo=1 LIMIT 1"):
         return
     ts = now_ms()
@@ -401,3 +439,33 @@ def seed_demo(d: Database) -> None:
                 (new_id(), None, p["name"], p["first_message"], p["description"], p["backstory"], p["personality"],
                  json.dumps(p["tags"], ensure_ascii=False), ts - i, ts - i),
             )
+
+
+def purge_demo(d: Database) -> dict:
+    """Removes the made-up sample characters and sample stories (with the chats and scenes built on them)."""
+    from .images import delete_image_files
+    persona_ids = [r["id"] for r in d.all("SELECT id FROM personas WHERE is_demo=1")]
+    story_ids = [r["id"] for r in d.all("SELECT id FROM stories WHERE is_demo=1")]
+    if not persona_ids and not story_ids:
+        return {"personas": 0, "stories": 0, "rooms": 0}
+    rooms: set[int] = set()
+    with d.tx():
+        for pid in persona_ids:
+            rooms.update(r["room_id"] for r in d.all("SELECT room_id FROM room_personas WHERE persona_id=?", (pid,)))
+        for sid in story_ids:
+            rooms.update(r["id"] for r in d.all("SELECT id FROM rooms WHERE story_id=?", (sid,)))
+        # pictures that lived only in those chats (scene photos, own photos)
+        imgs = [r["image_id"] for rid in rooms for r in d.all(
+            "SELECT image_id FROM messages WHERE room_id=? AND image_id IS NOT NULL", (rid,))]
+        for rid in rooms:
+            d.run("DELETE FROM rooms WHERE id=?", (rid,))
+        for pid in persona_ids:
+            d.run("DELETE FROM personas WHERE id=?", (pid,))
+        for sid in story_ids:
+            d.run("DELETE FROM stories WHERE id=?", (sid,))
+        for iid in imgs:
+            d.run("DELETE FROM images WHERE id=?", (iid,))
+    delete_image_files(imgs)
+    out = {"personas": len(persona_ids), "stories": len(story_ids), "rooms": len(rooms)}
+    log.info("removed sample content: %s", out)
+    return out

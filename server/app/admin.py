@@ -52,3 +52,33 @@ def photos(db: Database) -> dict:
     return {"photos": [{"id": r["id"], "nick": r["nick"], "room": r["room_title"], "size": r["size"], "width": r["width"],
                         "height": r["height"], "created_at": r["created_at"], "expires_at": r["expires_at"]} for r in rows],
             "ttl_days": settings.chat_photo_ttl_days}
+
+
+def delete_user(db: Database, public_id: str) -> dict | None:
+    """Removes an account with everything it made: characters, stories, its chats and scenes, pictures.
+    Scenes where it was only a guest stay with their owner (the seat becomes free)."""
+    from .common import hub
+    from .images import delete_image_files
+    from .rooms import _bump
+    u = db.one("SELECT id, nick FROM users WHERE public_id=?", (public_id,))
+    if not u:
+        return None
+    uid = u["id"]
+    images = [r["id"] for r in db.all("SELECT id FROM images WHERE owner_id=?", (uid,))]
+    guest_rooms = [r["id"] for r in db.all("SELECT id FROM rooms WHERE guest_id=?", (uid,))]
+    owned = [r["id"] for r in db.all("SELECT id FROM rooms WHERE owner_id=?", (uid,))]
+    with db.tx():
+        # its pictures in other people's scenes become a short note instead of a broken image
+        for iid in images:
+            for m in db.all("SELECT id, room_id FROM messages WHERE image_id=?", (iid,)):
+                if m["room_id"] not in owned:
+                    rev = _bump(db, m["room_id"])
+                    db.run("UPDATE messages SET image_id=NULL, kind='system', text='Картинка удалена.', rev=? WHERE id=?",
+                           (rev, m["id"]))
+        db.run("DELETE FROM users WHERE id=?", (uid,))  # cascades: sessions, friends, stories, rooms, personas, images
+        for rid in guest_rooms:
+            _bump(db, rid, meta=True)
+    delete_image_files(images)
+    for rid in guest_rooms + owned:
+        hub.notify(f"room:{rid}")
+    return {"nick": u["nick"], "rooms": len(owned), "images": len(images)}

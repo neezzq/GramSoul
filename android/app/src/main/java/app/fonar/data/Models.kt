@@ -212,6 +212,9 @@ data class RoomDto(
     val cloud_available: Boolean = false,
     /** The small on-server model; off on the current server, so its switch is hidden. */
     val local_available: Boolean = false,
+    /** Pictures of this chat: style id and the player's fixed description of the scenes. */
+    val image_style: String = "aesthetic",
+    val image_notes: String = "",
     val images_available: Boolean = false,
     val ai_models: Map<String, String> = emptyMap(),
 )
@@ -333,7 +336,13 @@ data class ImageJobDto(
 data class RoomSettingsReq(val ai_mode: String)
 
 @Serializable
-data class RoomSettingsRes(val ai_mode: String)
+data class ImageSettingsReq(val image_style: String, val image_notes: String)
+
+@Serializable
+data class NickReq(val nick: String)
+
+@Serializable
+data class RoomSettingsRes(val ai_mode: String = "cloud", val image_style: String = "aesthetic", val image_notes: String = "")
 
 @Serializable
 data class PhotoReq(val client_id: String, val prompt: String = "")

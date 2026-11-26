@@ -35,7 +35,7 @@ jobs:
           mkdir -p /tmp/data
           # all AI goes to a local stand-in for the OpenRouter API (no real key in CI)
           nohup python3 tools/mock_openrouter.py 9009 > /tmp/mock.log 2>&1 &
-          (cd server && DATA_DIR=/tmp/data \
+          (cd server && DATA_DIR=/tmp/data DEMO_CONTENT=on \
              OPENROUTER_API_KEY=sk-or-mock OPENROUTER_BASE_URL=http://127.0.0.1:9009/api/v1 \
              nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/api.log 2>&1 &)
           for i in $(seq 1 30); do curl -fs localhost:8000/v1/health && break; sleep 1; done

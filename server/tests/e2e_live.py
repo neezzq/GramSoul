@@ -79,6 +79,9 @@ def ensure_done(h, room, s, dt):
     return s, dt
 
 
+CLEANUP: list = []
+
+
 def main():
     print(f"Backend: {BASE}")
     h = c.get("/v1/health").json()
@@ -118,7 +121,15 @@ def main():
     out = c.get("/v1/friends", headers=ha).json()
     check("sender sees friend", [f["nick"] for f in out["friends"]] == [nick_b])
 
-    demo = next(s for s in c.get("/v1/stories", headers=ha).json()["stories"] if s["is_demo"])
+    demo = next((s for s in c.get("/v1/stories", headers=ha).json()["stories"] if s["is_demo"]), None)
+    if demo is None:  # production has no sample story: the test brings its own (removed at the end)
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        from app.demo import DEMO
+        r = c.post("/v1/stories", json=DEMO, headers=ha)
+        assert r.status_code in (200, 201), r.text
+        demo = r.json()["story"]
+        CLEANUP.append(lambda: c.delete(f"/v1/stories/{demo['id']}", headers=ha))
     room = c.post(f"/v1/stories/{demo['id']}/rooms", headers=ha).json()["room"]
     rid = room["id"]
     inv = c.post(f"/v1/rooms/{rid}/invite", json={"user_id": b["user"]["id"]}, headers=ha).json()["invite"]
@@ -224,6 +235,11 @@ def main():
 
 
 def finish():
+    for undo in CLEANUP:
+        try:
+            undo()
+        except Exception:
+            pass
     print("\nTimings:")
     for t in timings:
         tok_s = (t.get("output_tokens") or 0) / max(1, (t.get("output_ms") or 1)) * 1000

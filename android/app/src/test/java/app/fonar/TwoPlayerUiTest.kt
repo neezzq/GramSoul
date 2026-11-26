@@ -179,7 +179,9 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("about_input").performTextInput("Люблю маяки")
             compose.onNodeWithTag("about_save").performClick()
             compose.waitUntil(10_000) { old.call { me() }.user.about == "Люблю маяки" }
-            compose.onNodeWithTag("transfer_code_button").performClick()
+            // (a semantic click: the "saved" snackbar may cover the button)
+            compose.onNodeWithTag("transfer_code_button").performScrollTo()
+                .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
             compose.waitTag("transfer_code")
             // a tap on the code copies it
             compose.onNodeWithTag("transfer_code").performClick()
@@ -230,6 +232,16 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("change_password2_input").performTextInput("new-pass-99")
             compose.onNodeWithTag("password_save").performScrollTo().performClick()
             compose.waitText("Пароль сохранён")
+            // a new nick
+            val newNick = uniq("Nika.n")
+            compose.onNodeWithTag("nick_edit").performScrollTo().performClick()
+            compose.waitTag("nick_new_input")
+            shot("05e_nick_edit")
+            compose.onNodeWithTag("nick_new_input").performTextReplacement(newNick)
+            compose.onNodeWithTag("nick_save").performClick()
+            compose.waitText("Ник изменён")
+            compose.waitText(newNick)
+            assertEquals(newNick, (app.graph.session.value as SessionStore.State.Active).session.nick)
             // log out
             // (a semantic click: the "saved" snackbar may still cover the bottom of the screen)
             compose.onNodeWithTag("logout").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
@@ -239,7 +251,7 @@ class TwoPlayerUiTest {
             assertTrue(app.graph.session.value is SessionStore.State.None)
             // log in with nick + password; a wrong password says nothing about the nick
             compose.onNodeWithTag("mode_login").performClick()
-            compose.onNodeWithTag("nick_input").performTextInput(nick.lowercase())
+            compose.onNodeWithTag("nick_input").performTextInput(newNick.lowercase())
             compose.onNodeWithTag("password_input").performTextInput(TEST_PASSWORD)
             compose.onNodeWithTag("start_button").performClick()
             compose.waitText("Неверный ник или пароль")
@@ -247,7 +259,7 @@ class TwoPlayerUiTest {
             shot("01b_login")
             compose.onNodeWithTag("start_button").performClick()
             compose.waitTag("my_nick")
-            assertEquals(nick, (app.graph.session.value as SessionStore.State.Active).session.nick)
+            assertEquals(newNick, (app.graph.session.value as SessionStore.State.Active).session.nick)
         }
     }
 
@@ -284,6 +296,11 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("suggest_button").performClick()
             compose.waitTag("suggestion_2")
             shot("31_suggestions")
+            // the options can be hidden and asked for again
+            compose.onNodeWithTag("suggestions_hide").performClick()
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("suggestion_0").fetchSemanticsNodes().isEmpty() }
+            compose.onNodeWithTag("suggest_button").performClick()
+            compose.waitTag("suggestion_2")
             compose.onNodeWithTag("suggestion_1").performClick()
             compose.waitText("Кто ты такой?")
             // fix my own line by a long press
@@ -447,8 +464,21 @@ class TwoPlayerUiTest {
             shot("07_chat_after_regenerate")
             // the small local model is gone: no switch for it
             assertTrue(compose.onAllNodesWithTag("ai_mode").fetchSemanticsNodes().isEmpty())
-            // one tap on the camera draws what is happening now
+            // picture settings of this chat: a fixed description of the scenes and a style («Эстетика» by default)
             compose.onNodeWithTag("photo_button").performClick()
+            compose.waitTag("photo_settings")
+            shot("07e_camera_menu")
+            compose.onNodeWithTag("photo_settings").performClick()
+            compose.waitTag("image_settings")
+            compose.onNodeWithTag("image_notes").performTextInput("Маяк зимой, вечер; Лада в красном шарфе")
+            compose.onNodeWithTag("scene_style_anime", useUnmergedTree = true).performScrollTo().performClick()
+            shot("07f_image_settings")
+            compose.onNodeWithTag("image_settings_save").performScrollTo().performClick()
+            compose.waitUntil(20_000) { b.call { room(roomId) }.room.let { it.image_style == "anime" && it.image_notes.startsWith("Маяк зимой") } }
+            // the camera: «Авто — по диалогу» draws what is happening now
+            compose.onNodeWithTag("photo_button").performClick()
+            compose.waitTag("photo_auto")
+            compose.onNodeWithTag("photo_auto").performClick()
             compose.waitTag("msg_photo", 30_000)
             compose.waitUntil(30_000) { b.call { sync(roomId, 0, -1, 0) }.image_job?.status == "done" }
             // the friend sends a photo of their own: it is on their side of the chat
@@ -456,8 +486,10 @@ class TwoPlayerUiTest {
             compose.waitTag("msg_own_photo", 30_000)
             compose.waitText("мой кот")
             shot("07d_own_photo")
-            // a long press on the camera: draw by own description
-            compose.onNodeWithTag("photo_button").performTouchInput { longClick() }
+            // «По моему описанию»
+            compose.onNodeWithTag("photo_button").performClick()
+            compose.waitTag("photo_custom")
+            compose.onNodeWithTag("photo_custom").performClick()
             compose.waitTag("photo_confirm")
             compose.onNodeWithTag("photo_prompt").performTextInput("маяк в тумане")
             shot("07c_photo_panel")

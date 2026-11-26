@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.2';
+const WEB_VERSION = '1.3';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -64,6 +64,7 @@ const ICONS = {
   sparkle: 'M11 3l1.7 4.8L17.5 9.5l-4.8 1.7L11 16l-1.7-4.8L4.5 9.5l4.8-1.7zM18.5 14v5M16 16.5h5',
   image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 8.5h.01',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
+  sliders: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4',
 };
 function icon(name, size = 24) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -628,7 +629,12 @@ async function screenPersonaEdit(root, id) {
       h('button', { class: 'btn primary grow', id: 'publish', onclick: () => save(true) }, 'Опубликовать')));
 }
 
-const STYLES = [['anime', 'Аниме'], ['realism', 'Реализм'], ['painted', 'Нарисованный'], ['manhwa', 'Манхва'], ['sketch', 'Ч/б рисунок']];
+const STYLES = [['aesthetic', 'Эстетика'], ['anime', 'Аниме'], ['realism', 'Реализм'], ['painted', 'Нарисованный'], ['manhwa', 'Манхва'], ['sketch', 'Ч/б рисунок']];
+const STYLE_PREVIEWS = new Set(['anime', 'realism', 'painted', 'manhwa', 'sketch']);
+function styleTile(sid, label, on, idPrefix, onPick) {
+  const pic = STYLE_PREVIEWS.has(sid) ? h('img', { src: 'styles/' + sid + '.jpg', alt: label }) : h('div', { class: 'ph ' + sid, role: 'img', 'aria-label': label });
+  return h('button', { class: 'style' + (on ? ' on' : ''), id: idPrefix + sid, type: 'button', onclick: onPick }, pic, label);
+}
 function avatarSheet(name, description, onUse) {
   let style = 'anime';
   const body = h('div');
@@ -639,8 +645,7 @@ function avatarSheet(name, description, onUse) {
     desc.value = (description || '').slice(0, 400);
     const grid = h('div', { class: 'styles' });
     const draw = () => grid.replaceChildren(...STYLES.map(([sid, label]) =>
-      h('button', { class: 'style' + (sid === style ? ' on' : ''), id: 'style-' + sid, type: 'button', onclick: () => { style = sid; draw(); } },
-        h('img', { src: 'styles/' + sid + '.jpg', alt: label }), label)));
+      styleTile(sid, label, sid === style, 'style-', () => { style = sid; draw(); })));
     draw();
     const err = h('div', { class: 'error' });
     const gen = h('button', { class: 'btn primary wide', id: 'avatar-generate', style: 'margin-top:14px' }, 'Сгенерировать');
@@ -783,7 +788,7 @@ function screenChat(root, rid) {
   const suggestBtn = tool('suggest', 'sparkle', 'Варианты реплики');
   const regenBtn = tool('regenerate', 'refresh', 'Перегенерировать');
   const contBtn = tool('continue', 'forward', 'Продолжить сцену');
-  const sceneBtn = tool('photo', 'camera', 'Нарисовать текущую сцену (удерживай — своё описание)');
+  const sceneBtn = tool('photo', 'camera', 'Картинка сцены: авто или по описанию');
   const uploadBtn = tool('upload', 'image', 'Отправить своё фото');
   const panelBox = h('div');
   const suggBox = h('div', { id: 'suggestions' });
@@ -1044,6 +1049,51 @@ function screenChat(root, rid) {
       toBottom();
     } catch (e) { toast(e.message); }
   }
+  function chooseScene() {
+    const room = st.room;
+    if (!room) return;
+    const style = (STYLES.find(([sid]) => sid === (room.image_style || 'aesthetic')) || STYLES[0])[1];
+    const s = sheet('Картинка сцены',
+      h('button', { class: 'list-item', id: 'photo-auto', onclick: () => { s.close(); drawScene(''); } }, icon('sparkle'),
+        h('div', { class: 'grow' }, h('div', { class: 't' }, 'Авто — по диалогу'),
+          h('div', { class: 's' }, 'Что происходит сейчас, с учётом описания сцен чата'))),
+      h('button', { class: 'list-item', id: 'photo-custom', onclick: () => { s.close(); openScenePrompt(); } }, icon('edit'),
+        h('div', { class: 'grow' }, h('div', { class: 't' }, 'По моему описанию'), h('div', { class: 's' }, 'Напиши, что нарисовать'))),
+      h('button', { class: 'list-item', id: 'photo-settings', onclick: () => { s.close(); openImageSettings(); } }, icon('sliders'),
+        h('div', { class: 'grow' }, h('div', { class: 't' }, 'Стиль и описание сцен'),
+          h('div', { class: 's ellipsis' }, style + (room.image_notes ? ' · ' + room.image_notes : '')))));
+  }
+  function openImageSettings() {
+    const room = st.room;
+    if (!room) return;
+    const owner = room.my_role === 'owner';
+    let style = room.image_style || 'aesthetic';
+    const notes = autoGrow(h('textarea', { class: 'field', id: 'image-notes', rows: 3, maxlength: 1000,
+      placeholder: 'Например: зимний посёлок у моря, вечер, тёплые окна. Ива — в чёрной куртке, Ян — длинные тёмные волосы.' }), 180);
+    notes.value = room.image_notes || '';
+    notes.disabled = !owner;
+    const grid = h('div', { class: 'styles' });
+    const draw = () => grid.replaceChildren(...STYLES.map(([sid, label]) =>
+      styleTile(sid, label, sid === style, 'scene-style-', () => { if (owner) { style = sid; draw(); } })));
+    draw();
+    const save = h('button', { class: 'btn primary wide', id: 'image-settings-save', style: 'margin-top:14px', disabled: !owner }, 'Сохранить');
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        const r = await api(`/v1/rooms/${rid}/settings`, { method: 'PATCH', body: { image_style: style, image_notes: notes.value.trim() } });
+        st.room = { ...st.room, image_style: r.image_style, image_notes: r.image_notes };
+        s.close();
+        toast('Настройки картинок сохранены');
+      } catch (e) { toast(e.message); save.disabled = false; }
+    });
+    const s = sheet('Картинки этого чата',
+      h('div', { class: 'muted small', style: 'margin-bottom:10px;line-height:1.45' },
+        'ИИ рисует сцены в выбранном стиле и всегда держится этого описания: места, обстановки, внешности героев — и не придумывает новое каждый раз.'),
+      h('label', { class: 'lbl' }, 'Описание сцен'), notes,
+      h('label', { class: 'lbl' }, 'Стиль'), grid,
+      owner ? save : h('div', { class: 'muted small', style: 'margin-top:12px' }, 'Менять может только хозяин сцены.'));
+    s.el.id = 'image-settings';
+  }
   function openScenePrompt() {
     const what = h('input', { class: 'field', id: 'photo-prompt', placeholder: 'что нарисовать', maxlength: 300 });
     const go = h('button', { class: 'btn primary small', id: 'photo-confirm' }, 'Нарисовать');
@@ -1070,13 +1120,18 @@ function screenChat(root, rid) {
   }
 
   function drawSugg() {
-    suggBox.replaceChildren(...st.suggestions.map((t, i) => h('button', { class: 'sugg', id: 'suggestion-' + i, onclick: () => {
-      input.value = t;
-      input.dispatchEvent(new Event('input'));
-      st.suggestions = [];
-      drawSugg();
-      input.focus();
-    } }, richText(t, false))));
+    if (!st.suggestions.length) { suggBox.replaceChildren(); return; }
+    const hide = h('button', { class: 'icon-btn small', id: 'suggestions-hide', 'aria-label': 'Скрыть варианты', title: 'Скрыть',
+      onclick: () => { st.suggestions = []; drawSugg(); } }, icon('close', 18));
+    suggBox.replaceChildren(
+      h('div', { class: 'sugg-head' }, h('span', null, 'Варианты ответа'), hide),
+      ...st.suggestions.map((t, i) => h('button', { class: 'sugg', id: 'suggestion-' + i, style: `animation-delay:${i * 45}ms`, onclick: () => {
+        input.value = t;
+        input.dispatchEvent(new Event('input'));
+        st.suggestions = [];
+        drawSugg();
+        input.focus();
+      } }, richText(t, false))));
   }
 
   input.addEventListener('input', () => { sendBtn.disabled = !input.value.trim(); });
@@ -1100,9 +1155,7 @@ function screenChat(root, rid) {
   regenBtn.addEventListener('click', () => action('regenerate'));
   editBtn.addEventListener('click', () => { const m = lastAiMsg(); if (m) openEdit(m); });
   uploadBtn.addEventListener('click', uploadOwnPhoto);
-  let sceneLong = false;
-  longPress(sceneBtn, () => { sceneLong = true; openScenePrompt(); });
-  sceneBtn.addEventListener('click', () => { if (sceneLong) { sceneLong = false; return; } drawScene(''); });
+  sceneBtn.addEventListener('click', chooseScene);
   suggestBtn.addEventListener('click', async () => {
     suggestBtn.disabled = true;
     try {
@@ -1131,6 +1184,7 @@ function screenChat(root, rid) {
     const owner = room.my_role === 'owner';
     const label = room.kind === 'chat' ? 'Удалить чат' : owner ? 'Удалить сцену' : 'Выйти из сцены';
     const s = sheet(null,
+      h('button', { class: 'btn ghost wide', id: 'menu-image-settings', style: 'margin-bottom:8px', onclick: () => { s.close(); openImageSettings(); } }, 'Стиль и описание картинок'),
       h('button', { class: 'btn ghost wide', style: 'margin-bottom:8px', onclick: () => { s.close(); openScenePrompt(); } }, 'Картинка по своему описанию'),
       h('button', { class: 'btn danger wide', id: 'leave', onclick: async () => {
         s.close();
@@ -1292,6 +1346,29 @@ async function screenProfile(root) {
     try { u = (await api('/v1/me', { method: 'PATCH', body: { about: about.value.trim() } })).user; toast('Сохранено'); } catch (e) { toast(e.message); }
   });
 
+  // nick: can be changed (unique, same rules as at registration)
+  const nickText = h('span', { id: 'profile-nick' }, u.nick);
+  const nickRow = h('div', { class: 'row', style: 'justify-content:center;gap:6px;font-size:24px;font-weight:700' }, nickText,
+    h('button', { class: 'icon-btn small', id: 'nick-edit', 'aria-label': 'Изменить ник', title: 'Изменить ник', onclick: () => {
+      const field = h('input', { class: 'field', id: 'nick-new', value: u.nick, maxlength: 20, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+      const err = h('div', { class: 'error' });
+      const save = h('button', { class: 'btn primary wide', id: 'nick-save', style: 'margin-top:12px' }, 'Сохранить ник');
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        try {
+          u = (await api('/v1/me', { method: 'PATCH', body: { nick: field.value.trim() } })).user;
+          store.me = { ...(store.me || {}), ...u };
+          nickText.textContent = u.nick;
+          drawAv();
+          sh.close();
+          toast('Ник изменён');
+        } catch (e) { err.textContent = e.message; save.disabled = false; }
+      });
+      const sh = sheet('Новый ник', h('div', { class: 'muted small', style: 'margin-bottom:10px' },
+        '3–20 символов: буквы, цифры, «_» и «.». Друзья увидят новый ник сразу; войти можно будет только по нему.'), field, err, save);
+      field.focus();
+    } }, icon('edit', 20)));
+
   // password change
   const oldPw = h('input', { class: 'field', id: 'old-password', type: 'password', placeholder: 'Старый пароль', autocomplete: 'current-password' });
   const newPw = h('input', { class: 'field', id: 'change-password', type: 'password', placeholder: 'Новый пароль (от 6 символов)', autocomplete: 'new-password', style: 'margin-top:8px' });
@@ -1334,7 +1411,7 @@ async function screenProfile(root) {
       u.avatar_image_id ? h('button', { class: 'link', onclick: async () => {
         try { u = (await api('/v1/me', { method: 'PATCH', body: { avatar_image_id: '' } })).user; drawAv(); } catch (e) { toast(e.message); }
       } }, 'Убрать') : null),
-    h('div', { class: 'center', id: 'profile-nick', style: 'font-size:24px;font-weight:700' }, u.nick),
+    nickRow,
     h('label', { class: 'lbl' }, 'О себе'), about, saveAbout,
     h('div', { class: 'card', style: 'margin-top:20px' },
       h('div', { style: 'font-weight:600' }, 'Вход с другого устройства'),

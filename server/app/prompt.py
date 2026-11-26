@@ -501,9 +501,12 @@ def card_versions_json(npcs: list[Card], seats: list[Seat]) -> str:
 # Scene photo prompt (cloud image model)
 # ---------------------------------------------------------------------------
 def image_prompt(title: str, world_rules: str, location: str, characters: list[Card], recent: list[HistoryItem],
-                 user_prompt: str, with_references: bool = False) -> str:
-    """What the player asked for comes first and wins; the scene only supplies looks and mood.
-    Everyone in the picture is an adult (all characters are 18+)."""
+                 user_prompt: str, with_references: bool = False, style: str = "", notes: str = "",
+                 portraits: int | None = None, last_scene: bool = False) -> str:
+    """What the player asked for comes first and wins; the chat's own scene description and the characters'
+    looks are fixed, so pictures of one chat stay consistent. Everyone in the picture is an adult (18+).
+    portraits = how many character portraits are attached; last_scene = the previous picture of this chat
+    is attached after them."""
     want = user_prompt.strip()
     if want:
         lines = [f"Нарисуй одну иллюстрацию: {_clip(want, 300)}.",
@@ -511,7 +514,11 @@ def image_prompt(title: str, world_rules: str, location: str, characters: list[C
                  f"чем в текущей сцене ролевой истории «{_clip(title, 80)}». Сцену ниже используй только для "
                  "внешности персонажей, эпохи и настроения."]
     else:
-        lines = [f"Нарисуй одну иллюстрацию к текущей сцене ролевой истории «{_clip(title, 80)}»."]
+        lines = [f"Нарисуй одну иллюстрацию к текущей сцене ролевой истории «{_clip(title, 80)}»: "
+                 "что происходит прямо сейчас, по последним репликам."]
+    if notes.strip():
+        lines.append("Постоянное описание сцен этого чата от игрока — соблюдай всегда, ничего не придумывай "
+                     "вместо него: " + _clip(notes, 600) + ".")
     if world_rules.strip():
         lines.append("Мир и эпоха: " + _clip(world_rules, 350) + ".")
     if location.strip() and not want:
@@ -519,17 +526,23 @@ def image_prompt(title: str, world_rules: str, location: str, characters: list[C
     looks = [f"{c.name} — {_clip(c.appearance, 300)}" for c in characters if c.appearance.strip()]
     if looks:
         lines.append("Внешность персонажей — строго по описанию, ничего в ней не меняй: " + "; ".join(looks) + ".")
-    if with_references:
-        lines.append("Приложенные портреты показывают, как выглядят персонажи: сохрани их лица, причёски, цвет волос "
-                     "и глаз, одежду и стиль.")
+    n = portraits if portraits is not None else (1 if with_references else 0)
+    if n:
+        lines.append(("Первые приложенные картинки" if last_scene else "Приложенные портреты")
+                     + " показывают, как выглядят персонажи: сохрани их лица, причёски, цвет волос и глаз, одежду.")
+    if last_scene:
+        lines.append(("Последняя приложенная картинка" if n else "Приложенная картинка")
+                     + " — предыдущий кадр этого чата: то же место, тот же свет и те же люди; покажи новый момент, "
+                     "не копируя кадр.")
     if recent:
         happening = " ".join(_cut(f"{h.speaker}: {h.text}", 220) for h in recent[-5:])
         lines.append(("Для настроения — что было в сцене: " if want else "Что происходит прямо сейчас: ")
                      + _clip(happening, 500 if want else 900) + ".")
+    lines.append("Не выдумывай новых персонажей, места и деталей, которых нет в описании и репликах.")
     lines.append("Все люди на изображении — взрослые (18+), даже если в тексте их называют учениками, "
                  "студентами, юношами или девушками.")
-    lines.append("Стиль: кинематографичная цифровая живопись, выразительный свет, вертикальный кадр. "
-                 "Без текста, надписей, подписей и рамок на изображении.")
+    lines.append("Стиль: " + (style.strip() or "кинематографичная цифровая живопись, выразительный свет")
+                 + ". Вертикальный кадр. Без текста, надписей, подписей, водяных знаков и рамок на изображении.")
     return "\n".join(lines)
 
 

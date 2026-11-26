@@ -77,6 +77,9 @@ class Settings:
     about_max_chars: int = 300
     # the small local model (Ollama) is off by default: every room uses the cloud model
     local_ai: bool = field(default_factory=lambda: _env("LOCAL_AI", "off").lower() in ("1", "on", "true", "yes"))
+    # sample characters and the sample story: only for tests (DEMO_CONTENT=on); off in production
+    demo_content: bool = field(default_factory=lambda: _env("DEMO_CONTENT", "off").lower() in ("1", "on", "true", "yes"))
+    rl_nick_changes_per_day: int = field(default_factory=lambda: _int("RL_NICK_CHANGES_PER_DAY", 5))
     chat_photo_ttl_days: int = field(default_factory=lambda: _int("CHAT_PHOTO_TTL_DAYS", 7))
     rl_chat_photos_per_hour: int = field(default_factory=lambda: _int("RL_CHAT_PHOTOS_PER_HOUR", 20))
     # scrypt hash of the admin password (deploy/set-admin-password.sh); empty = no admin page

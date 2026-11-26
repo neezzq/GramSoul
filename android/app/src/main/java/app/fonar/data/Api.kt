@@ -143,6 +143,7 @@ class Api(
     suspend fun me(): MeRes = get("/v1/me")
     suspend fun logout(): OkRes = postEmpty("/v1/logout")
     suspend fun setAbout(about: String): MeRes = patch("/v1/me", AboutReq(about))
+    suspend fun setNick(nick: String): MeRes = patch("/v1/me", NickReq(nick))
     suspend fun setAvatar(imageId: String?): MeRes = patch("/v1/me", AvatarReq(imageId ?: ""))
     suspend fun transferCode(): TransferCodeRes = postEmpty("/v1/me/transfer-code")
     suspend fun loginWithTransferCode(nick: String, code: String): LoginRes =
@@ -162,7 +163,6 @@ class Api(
     suspend fun createStory(s: StoryReq): StoryRes = post("/v1/stories", s)
     suspend fun updateStory(id: String, s: StoryReq): StoryRes = put("/v1/stories/$id", s)
     suspend fun quickStory(q: QuickStoryReq): StoryRes = post("/v1/stories/quick", q)
-    suspend fun demoStory(): StoryRes = postEmpty("/v1/stories/demo")
     suspend fun deleteStory(id: String): OkRes = delete("/v1/stories/$id")
     suspend fun patchCharacter(storyId: String, charId: String, p: CharacterPatch): CharacterRes =
         patch("/v1/stories/$storyId/characters/$charId", p)
@@ -186,6 +186,8 @@ class Api(
     suspend fun setScene(roomId: String, location: String): SceneReq = patch("/v1/rooms/$roomId/scene", SceneReq(location))
     suspend fun lastPrompt(roomId: String): LastPromptRes = get("/v1/rooms/$roomId/last-prompt")
     suspend fun setAiMode(roomId: String, mode: String): RoomSettingsRes = patch("/v1/rooms/$roomId/settings", RoomSettingsReq(mode))
+    suspend fun setImageSettings(roomId: String, style: String, notes: String): RoomSettingsRes =
+        patch("/v1/rooms/$roomId/settings", ImageSettingsReq(style, notes))
     suspend fun photo(roomId: String, clientId: String, prompt: String): PhotoRes =
         post("/v1/rooms/$roomId/photo", PhotoReq(clientId, prompt))
 

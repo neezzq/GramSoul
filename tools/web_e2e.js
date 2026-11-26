@@ -79,6 +79,12 @@ async function apiAs(token, p, method = 'GET', body) {
     await page.fill('#chat-input', '');
     await page.click('#suggest');
     await page.waitForSelector('#suggestion-2');
+    // the options can be hidden
+    await page.click('#suggestions-hide');
+    await page.waitForFunction(() => !document.querySelector('#suggestion-0'));
+    ok('suggestions can be hidden', true);
+    await page.click('#suggest');
+    await page.waitForSelector('#suggestion-2');
     await page.click('#suggestion-1');
     ok('three suggestions, one fills the input', (await page.inputValue('#chat-input')) === 'Кто ты такой?');
     await page.click('#edit-last');
@@ -90,10 +96,32 @@ async function apiAs(token, p, method = 'GET', body) {
     await page.click('#regenerate');
     await page.waitForFunction((b) => { const x = document.querySelectorAll('.bubble.char'); return x.length && x[x.length - 1].innerText !== b && !document.querySelector('#generation-status'); }, before, { timeout: 20000 });
     ok('regenerate replaces the reply', true);
-    // scene picture from the dialogue, one tap
+    // picture settings of this chat: a fixed scene description and a style («Эстетика» by default)
     await page.click('#photo');
+    await page.click('#photo-settings');
+    await page.waitForSelector('#scene-style-aesthetic.on');
+    await page.fill('#image-notes', 'Оранжерея вечером, тёплые фонарики; Вера в соломенной шляпе');
+    await page.click('#scene-style-anime');
+    await shot('web_04a_image_settings');
+    await page.click('#image-settings-save');
+    await page.waitForSelector('text=Настройки картинок сохранены');
+    const token = await page.evaluate(() => localStorage.getItem('gs_token'));
+    const rid = page.url().split('/').pop();
+    const rd = (await apiAs(token, '/v1/rooms/' + rid)).room;
+    ok('chat picture settings saved (description + style)', rd.image_style === 'anime' && rd.image_notes.includes('Оранжерея'), rd.image_style);
+    // scene picture: auto from the dialogue …
+    await page.click('#photo');
+    await page.click('#photo-auto');
     await page.waitForSelector('[data-kind="photo"]:not(.own)', { timeout: 20000 });
-    ok('scene picture from the dialogue', true);
+    ok('scene picture: auto from the dialogue', true);
+    // … or by own description
+    await page.waitForFunction(() => !document.querySelector('#photo').disabled, null, { timeout: 20000 });
+    await page.click('#photo');
+    await page.click('#photo-custom');
+    await page.fill('#photo-prompt', 'они пьют чай под фонариками');
+    await page.click('#photo-confirm');
+    await page.waitForSelector('[data-kind="photo"] >> text=они пьют чай под фонариками', { timeout: 20000 });
+    ok('scene picture: by own description', true);
     // own photo into the chat
     const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#upload')]);
     await chooser.setFiles(pngPath);
@@ -123,6 +151,13 @@ async function apiAs(token, p, method = 'GET', body) {
     await page.click('#change-password-save');
     await page.waitForSelector('text=Пароль изменён');
     ok('password changed in the profile', true);
+    // a new nick
+    const me2 = uniq('Nika');
+    await page.click('#nick-edit');
+    await page.fill('#nick-new', me2);
+    await page.click('#nick-save');
+    await page.waitForSelector('#profile-nick >> text=' + me2);
+    ok('nick changed in the profile', true, me2);
     await shot('web_05_profile');
 
     // another device: nick + password
@@ -130,7 +165,7 @@ async function apiAs(token, p, method = 'GET', body) {
     const p2 = await ctx2.newPage();
     watch(p2);
     await p2.goto(base + '/app/');
-    await p2.fill('#nick', me.toUpperCase());
+    await p2.fill('#nick', me2.toUpperCase());
     await p2.fill('#password', pw + '!');
     await p2.click('#login');
     await p2.waitForSelector('#persona-search');
@@ -162,8 +197,8 @@ async function apiAs(token, p, method = 'GET', body) {
       await p4.waitForSelector('text=Неверный пароль');
       await p4.fill('#admin-password', adminPassword);
       await p4.click('#admin-login');
-      await p4.waitForSelector(`#users-table tr[data-nick="${me}"]`);
-      const cells = await p4.locator(`#users-table tr[data-nick="${me}"] td`).allInnerTexts();
+      await p4.waitForSelector(`#users-table tr[data-nick="${me2}"]`);
+      const cells = await p4.locator(`#users-table tr[data-nick="${me2}"] td`).allInnerTexts();
       ok('admin sees the user with text tokens', parseInt((cells[3] || '0').replace(/\D/g, ''), 10) > 0, cells.slice(0, 5).join(' | '));
       await p4.screenshot({ path: `${out}/web_07_admin_users.png` });
       await p4.click('#tab-photos');
@@ -172,6 +207,16 @@ async function apiAs(token, p, method = 'GET', body) {
       await p4.locator('[data-photo] button').first().click();
       await p4.waitForFunction(() => !document.querySelector('[data-photo]'));
       ok('admin deletes a player photo before the week is over', true);
+      // a test account is removed with everything it made
+      const junk = uniq('test');
+      await apiAs(null, '/v1/register', 'POST', { nick: junk, password: 'junk-pass-1' });
+      await p4.click('#tab-users');
+      await p4.waitForSelector(`#users-table tr[data-nick="${junk}"]`);
+      p4.once('dialog', (d) => d.accept());
+      await p4.click(`[data-delete="${junk}"]`);
+      await p4.waitForFunction((n) => !document.querySelector(`#users-table tr[data-nick="${n}"]`), junk);
+      const gone = await apiAs(null, '/v1/login', 'POST', { nick: junk, password: 'junk-pass-1' });
+      ok('admin deletes a test account', !gone.token);
       const msgs = await page.goto(base + '/app/#/chats');
     }
   } catch (e) {

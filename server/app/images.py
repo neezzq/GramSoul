@@ -59,3 +59,14 @@ def save_image(db: Database, owner_id: int | None, data: bytes, w: int, h: int) 
     db.run("INSERT INTO images(id, owner_id, mime, size, width, height, created_at) VALUES(?,?,?,?,?,?,?)",
            (iid, owner_id, "image/jpeg", len(data), w, h, now_ms()))
     return iid
+
+
+def delete_image_files(ids) -> None:
+    """Removes stored files (rows are deleted by the caller); missing files are fine."""
+    for iid in ids:
+        if not iid or "/" in iid or ".." in iid:
+            continue
+        try:
+            os.remove(os.path.join(settings.images_dir, iid + ".jpg"))
+        except OSError:
+            pass

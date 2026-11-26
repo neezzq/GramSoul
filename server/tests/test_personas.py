@@ -102,8 +102,9 @@ async def test_avatar_styles_validation_refusal_and_limits(client):
     from app import config
     h, _ = await register(client, "Mira")
     styles = (await client.get("/v1/avatar-styles", headers=h)).json()["styles"]
-    assert [s["id"] for s in styles] == ["anime", "realism", "painted", "manhwa", "sketch"]
-    assert "prompt" not in styles[0]  # style prompts never leave the server
+    assert [s["id"] for s in styles] == ["aesthetic", "anime", "realism", "painted", "manhwa", "sketch"]
+    assert styles[0]["label"] == "Эстетика"
+    assert "prompt" not in styles[0] and "scene" not in styles[0]  # style prompts never leave the server
     r = await client.post("/v1/avatars/generate", json={"description": "рыжая девушка", "style": "pixel"}, headers=h)
     assert r.status_code == 400 and r.json()["detail"]["code"] == "bad_style"
     r = await client.post("/v1/avatars/generate", json={"description": " ", "name": "", "style": "anime"}, headers=h)

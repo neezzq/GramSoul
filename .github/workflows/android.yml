@@ -37,7 +37,7 @@ jobs:
         run: |
           pip install -q -r server/requirements.txt
           mkdir -p /tmp/data
-          (cd server && DATA_DIR=/tmp/data LLM_BACKEND=fake REPLY_DEBOUNCE_MS=300 RL_REGISTER_PER_HOUR=1000 \
+          (cd server && DATA_DIR=/tmp/data LLM_BACKEND=fake DEMO_CONTENT=on REPLY_DEBOUNCE_MS=300 RL_REGISTER_PER_HOUR=1000 \
              nohup uvicorn app.main:app --port 8001 > /tmp/api.log 2>&1 &)
           sleep 3
           cd android && FONAR_TEST_BACKEND=http://127.0.0.1:8001 ./gradlew --no-daemon :app:testDebugUnitTest -Proborazzi.test.record=true

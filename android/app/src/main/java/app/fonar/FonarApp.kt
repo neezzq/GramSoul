@@ -82,6 +82,13 @@ class AppGraph(context: Context, backendUrl: String) {
         _needsPassword.value = false
     }
 
+    /** The nick was changed in the profile: keep the stored session in step. */
+    fun onNickChanged(user: UserDto) {
+        val active = session.value as? SessionStore.State.Active ?: return
+        sessionStore.save(active.session.token, user)
+        _session.value = sessionStore.load()
+    }
+
     val me: UserDto?
         get() = (session.value as? SessionStore.State.Active)?.session?.let { UserDto(it.userId, it.nick) }
 

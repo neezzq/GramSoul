@@ -73,6 +73,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavHostController
 import app.fonar.Routes
 import app.fonar.data.AvatarStyle
+import app.fonar.ui.components.DEFAULT_STYLES
+import app.fonar.ui.components.StyleGrid
 import app.fonar.data.PersonaReq
 import app.fonar.graph
 import app.fonar.ui.components.CenterLoading
@@ -83,31 +85,6 @@ import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
 
 /** The five avatar styles; prompts live on the server, the app only shows the names. */
-private val DEFAULT_STYLES = listOf(
-    AvatarStyle("anime", "Аниме"), AvatarStyle("realism", "Реализм"), AvatarStyle("painted", "Нарисованный"),
-    AvatarStyle("manhwa", "Манхва"), AvatarStyle("sketch", "Ч/б рисунок"),
-)
-
-/** Preview pictures generated with our own style prompts (res/drawable-nodpi/style_*.jpg). */
-private fun stylePreview(id: String): Int? = when (id) {
-    "anime" -> app.fonar.R.drawable.style_anime
-    "realism" -> app.fonar.R.drawable.style_realism
-    "painted" -> app.fonar.R.drawable.style_painted
-    "manhwa" -> app.fonar.R.drawable.style_manhwa
-    "sketch" -> app.fonar.R.drawable.style_sketch
-    else -> null
-}
-
-private fun styleBrush(id: String): Brush = Brush.linearGradient(
-    when (id) {
-        "anime" -> listOf(Color(0xFFFFC6E5), Color(0xFFB9A6FF), Color(0xFF8FD3FF))
-        "realism" -> listOf(Color(0xFFE2B48E), Color(0xFF7A4B33), Color(0xFF2A1A14))
-        "painted" -> listOf(Color(0xFF1F4E5F), Color(0xFFC79A3A), Color(0xFF2B1B3D))
-        "manhwa" -> listOf(Color(0xFFF2F2F2), Color(0xFF6B6B6B), Color(0xFF0D0D0D))
-        else -> listOf(Color(0xFFE9D8B4), Color(0xFFA6875A), Color(0xFF4A3A26))
-    },
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PersonaEditorScreen(nav: NavHostController, id: String?) {
@@ -397,37 +374,7 @@ private fun AvatarDialog(
                             hint = "Волосы, глаза, одежда… или просто: Лелуш Ви Британия из аниме «Код Гиасс». Пусто — нарисую по имени.",
                             testTag = "avatar_desc")
                         Text("Стиль", fontWeight = FontWeight.SemiBold)
-                        // all five visible at once: 3 + 2
-                        styles.chunked(3).forEach { row ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                row.forEach { st ->
-                                    val selected = st.id == style
-                                    Column(
-                                        Modifier.weight(1f).clip(RoundedCornerShape(14.dp)).clickable { style = st.id }
-                                            .testTag("style_${st.id}"),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                    ) {
-                                        Box(
-                                            Modifier.fillMaxWidth().aspectRatio(2f / 3f).clip(RoundedCornerShape(14.dp)).background(styleBrush(st.id))
-                                                .border(if (selected) 3.dp else 1.dp, if (selected) Fonar.Lamp else Fonar.SurfaceHigher,
-                                                    RoundedCornerShape(14.dp)),
-                                        ) {
-                                            stylePreview(st.id)?.let { res ->
-                                                androidx.compose.foundation.Image(
-                                                    androidx.compose.ui.res.painterResource(res), contentDescription = st.label,
-                                                    contentScale = ContentScale.Crop,
-                                                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)),
-                                                )
-                                            }
-                                        }
-                                        Text(st.label, style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                            color = if (selected) Fonar.Lamp else Fonar.Muted, modifier = Modifier.padding(top = 4.dp))
-                                    }
-                                }
-                                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-                            }
-                        }
+                        StyleGrid(styles, style, { style = it })
                         Button(onClick = { generate() }, enabled = !busy && (desc.trim().ifEmpty { name.trim() }).length >= 2,
                             modifier = Modifier.fillMaxWidth().testTag("avatar_generate")) {
                             if (busy) {

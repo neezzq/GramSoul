@@ -261,3 +261,40 @@ html.chat-open, html.chat-open body { overflow: hidden; height: 100%; overscroll
   position: fixed; z-index: 70; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-b) + 92px); max-width: 90%;
   padding: 12px 18px; border-radius: 16px; font-size: 14.5px;
 }
+
+/* ---------- suggestions header, small icon buttons, style tiles without a picture ---------- */
+.sugg-head { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-size: 13px; margin: 2px 2px 4px; }
+.icon-btn.small { width: 32px; height: 32px; color: #fff; }
+.icon-btn.small svg { width: 18px; height: 18px; }
+.style .ph { width: 100%; aspect-ratio: 2 / 3; border-radius: 14px; border: 1px solid rgba(255, 255, 255, .1); margin-bottom: 4px; }
+.style.on .ph { border: 3px solid var(--accent); box-shadow: var(--glow); }
+/* warm window light, muted film tones: the «Эстетика» look */
+.style .ph.aesthetic {
+  background: radial-gradient(120% 80% at 70% 25%, rgba(255, 214, 170, .85), rgba(255, 214, 170, 0) 55%),
+    linear-gradient(165deg, #c99b78 0%, #8a6250 38%, #3b2a24 72%, #15100e 100%);
+}
+
+/* ---------- smooth motion ---------- */
+@keyframes screenIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes msgIn { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes popIn { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+#app > * { animation: screenIn .28s cubic-bezier(.2, .8, .2, 1) both; }
+#app > .chat { animation-name: fadeIn; animation-duration: .22s; }
+.msgs > .m-row, .msgs > .narrator, .msgs > .photo, .msgs > .m-system { animation: msgIn .3s cubic-bezier(.2, .8, .2, 1) both; }
+.thought, .bubble { transition: background-color .2s; }
+.scrim { animation: fadeIn .2s ease-out both; }
+.sheet { animation: sheetUp .32s cubic-bezier(.2, .9, .25, 1) both; }
+.panel { animation: popIn .2s ease-out both; }
+.sugg { animation: msgIn .26s cubic-bezier(.2, .8, .2, 1) both; }
+.toast { animation: popIn .2s ease-out both; }
+.list-item, .pcard, .tool, .send, .star, .style, .tab, .icon-btn { transition: transform .14s ease, background-color .2s, opacity .2s, color .2s; }
+.list-item:active, .pcard:active, .style:active { transform: scale(.98); }
+.tool:active:not(:disabled), .send:active:not(:disabled), .star:active, .icon-btn:active { transform: scale(.9); }
+.tab.on svg { transition: filter .25s; }
+.viewer { animation: fadeIn .2s ease-out both; }
+.viewer img { animation: popIn .25s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

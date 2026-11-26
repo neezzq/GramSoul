@@ -1,5 +1,7 @@
 package app.fonar.ui.home
 
+import androidx.compose.animation.togetherWith
+
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.Face
 import androidx.compose.foundation.shape.CircleShape
@@ -190,11 +192,20 @@ fun HomeScreen(nav: NavHostController) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             if (state.loading) CenterLoading()
-            else when (tab) {
-                Tab.STORIES -> StoriesTab(state, vm, nav, onPlayWithFriend = { pickFriendFor = it }, onOpenInvites = { tab = Tab.SCENES })
-                Tab.CHARACTERS -> app.fonar.ui.personas.PersonasTab(nav)
-                Tab.SCENES -> ScenesTab(state, vm, nav)
-                Tab.FRIENDS -> FriendsTab(state, vm)
+            else androidx.compose.animation.AnimatedContent(
+                targetState = tab, label = "tabs",
+                transitionSpec = {
+                    (androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(220)) +
+                        androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(260)) { it / 24 })
+                        .togetherWith(androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(120)))
+                },
+            ) { t ->
+                when (t) {
+                    Tab.STORIES -> StoriesTab(state, vm, nav, onPlayWithFriend = { pickFriendFor = it }, onOpenInvites = { tab = Tab.SCENES })
+                    Tab.CHARACTERS -> app.fonar.ui.personas.PersonasTab(nav)
+                    Tab.SCENES -> ScenesTab(state, vm, nav)
+                    Tab.FRIENDS -> FriendsTab(state, vm)
+                }
             }
         }
     }
@@ -293,7 +304,7 @@ private fun StoriesTab(
             item { SectionTitle("Черновики") }
             items(state.drafts, key = { it.draftId }) { d ->
                 Card(colors = CardDefaults.cardColors(containerColor = Fonar.Surface),
-                    modifier = Modifier.fillMaxWidth().clickable { nav.navigate(Routes.editor(draftId = d.draftId)) }) {
+                    modifier = Modifier.animateItem().fillMaxWidth().clickable { nav.navigate(Routes.editor(draftId = d.draftId)) }) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(d.story.title.ifBlank { "Без названия" }, fontWeight = FontWeight.SemiBold)
@@ -305,10 +316,12 @@ private fun StoriesTab(
             }
         }
         item { SectionTitle("Мои истории") }
-        if (state.stories.none { it.is_demo }) item {
-            TextButton(onClick = { vm.restoreDemo() }) { Text("Вернуть демо-историю") }
+        if (state.stories.isEmpty()) item {
+            Text("Пока нет историй. Создай свою — быстро или в полном редакторе.", color = Fonar.Muted,
+                modifier = Modifier.testTag("stories_empty"))
         }
         items(state.stories, key = { it.id!! }) { s ->
+            Box(Modifier.animateItem()) {
             StoryCard(
                 s,
                 coverUrl = s.cover_image_id?.let { graph.api.ownImageUrl(it) },
@@ -318,6 +331,7 @@ private fun StoriesTab(
                 onEdit = { nav.navigate(Routes.editor(storyId = s.id)) },
                 onDelete = { vm.deleteStory(s.id!!) },
             )
+            }
         }
     }
 }
@@ -411,7 +425,7 @@ private fun ScenesTab(state: HomeState, vm: HomeViewModel, nav: NavHostControlle
         items(state.rooms, key = { it.id }) { r ->
             Card(
                 colors = CardDefaults.cardColors(containerColor = Fonar.Surface),
-                modifier = Modifier.fillMaxWidth().clickable { nav.openChat(r.id) }.testTag("room_${r.story_title}"),
+                modifier = Modifier.animateItem().fillMaxWidth().clickable { nav.openChat(r.id) }.testTag("room_${r.story_title}"),
             ) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Avatar(r.story_title, null, 42.dp)

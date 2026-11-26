@@ -169,7 +169,9 @@ fun PersonasTab(nav: NavHostController) {
                     )
                 }
                 items(s.items, key = { it.id }) { p ->
-                    PersonaCard(p, graph.api.personaAvatarUrl(p)) { nav.navigate(Routes.persona(p.id)) }
+                    Box(Modifier.animateItem()) {
+                        PersonaCard(p, graph.api.personaAvatarUrl(p)) { nav.navigate(Routes.persona(p.id)) }
+                    }
                 }
             }
         }

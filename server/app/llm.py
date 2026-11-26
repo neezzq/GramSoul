@@ -269,7 +269,7 @@ async def generate_image(prompt: str, aspect_ratio: str = "3:4", references: lis
     if references:
         content = [{"type": "text", "text": prompt}] + [
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(r).decode()}}
-            for r in references[:3]]
+            for r in references[:4]]  # up to 3 portraits + the previous scene picture
     body = {
         "model": settings.cloud_image_model,
         "messages": [{"role": "user", "content": content}],

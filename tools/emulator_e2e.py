@@ -443,10 +443,12 @@ def main():
         shot(B, "12b_cloud_reply")
         ok("cloud reaction arrived on both phones", True)
         tap_id(B, "photo_button")
+        shot(B, "12c_camera_menu")
+        tap_id(B, "photo_auto")  # «Авто — по диалогу»
         wait(A, rid="msg_photo", timeout=120)
         wait(B, rid="msg_photo", timeout=60)
         shot(A, "12d_photo")
-        ok("one tap draws the current scene; shown on both phones", True)
+        ok("camera → «Авто — по диалогу» draws the current scene; shown on both phones", True)
 
     # 8. B restarts the app: automatic login, scene still there
     adb(B, "shell", "am", "force-stop", PKG)

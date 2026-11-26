@@ -143,11 +143,12 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
         raise ApiError(409, "nick_taken", "Этот ник уже занят. Придумай другой.")
     u = d.one("SELECT * FROM users WHERE id=?", (cur.lastrowid,))
     user = User(u["id"], u["public_id"], u["nick"])
-    try:
-        demo = S.create_demo_story(d, user)
-    except Exception:  # the account must exist even if seeding fails
-        log.exception("demo seeding failed")
-        demo = None
+    demo = None
+    if settings.demo_content:  # sample story only in tests
+        try:
+            demo = S.create_demo_story(d, user)
+        except Exception:  # the account must exist even if seeding fails
+            log.exception("demo seeding failed")
     return {"token": token, "user": _me_dict(u), "demo_story_id": demo["id"] if demo else None}
 
 
@@ -241,6 +242,7 @@ async def set_password(body: PasswordIn, user: User = Depends(current_user), d: 
 class ProfileIn(BaseModel):
     about: str | None = Field(default=None, max_length=2000)
     avatar_image_id: str | None = Field(default=None, max_length=64)
+    nick: str | None = Field(default=None, max_length=64)
 
 
 @app.patch("/v1/me")
@@ -260,6 +262,24 @@ async def update_me(body: ProfileIn, user: User = Depends(current_user), d: Data
                 raise not_found("Картинка не найдена")
         sets.append("avatar_image_id=?")
         params.append(iid)
+    if "nick" in body.model_fields_set and body.nick is not None:
+        try:
+            nick = nickmod.validate(body.nick)
+        except nickmod.NickError as e:
+            raise ApiError(400, e.code, e.message)
+        if nick != user.nick:
+            key = nickmod.key(nick)
+            if d.one("SELECT 1 FROM users WHERE nick_key=? AND id<>?", (key, user.id)):
+                raise ApiError(409, "nick_taken", "Этот ник уже занят. Придумай другой.")
+            rate(f"nick:{user.id}", settings.rl_nick_changes_per_day, 86400, f"Ник можно менять не чаще {settings.rl_nick_changes_per_day} раз в сутки.")
+            try:
+                with d.tx():
+                    d.run("UPDATE users SET nick=?, nick_key=? WHERE id=?", (nick, key, user.id))
+                    rooms = R.rename_player(d, user.id, user.nick, nick)
+            except sqlite3.IntegrityError:
+                raise ApiError(409, "nick_taken", "Этот ник уже занят. Придумай другой.")
+            for rid in rooms:
+                hub.notify(f"room:{rid}")
     if sets:
         d.run(f"UPDATE users SET {', '.join(sets)} WHERE id=?", (*params, user.id))
     return {"user": _me_dict(_me_row(d, user.id))}
@@ -657,6 +677,8 @@ async def quick_story(body: S.QuickStoryIn, user: User = Depends(current_user), 
 
 @app.post("/v1/stories/demo", status_code=201)
 async def demo_story(user: User = Depends(current_user), d: Database = Depends(db)):
+    if not settings.demo_content:
+        raise not_found("Демо-истории больше нет.")
     rate(f"story:{user.id}", 60, 3600)
     return {"story": S.create_demo_story(d, user)}
 
@@ -867,6 +889,15 @@ async def admin_logout(request: Request, _: None = Depends(current_admin), d: Da
 @app.get("/v1/admin/users")
 async def admin_users(_: None = Depends(current_admin), d: Database = Depends(db)):
     return A.users(d)
+
+
+@app.delete("/v1/admin/users/{public_id}")
+async def admin_delete_user(public_id: str, _: None = Depends(current_admin), d: Database = Depends(db)):
+    res = A.delete_user(d, public_id)
+    if res is None:
+        raise not_found("Игрок не найден")
+    log.info("admin deleted user %s", res["nick"])
+    return {"ok": True, **res}
 
 
 @app.get("/v1/admin/photos")

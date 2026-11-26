@@ -4,6 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,6 +65,9 @@ object Routes {
     const val PROFILE = "profile"
     const val PERSONA = "persona/{id}"
     const val PERSONA_EDIT = "persona_edit?id={id}"
+    const val ROOM_IMAGES = "room_images/{roomId}"
+
+    fun roomImages(roomId: String) = "room_images/$roomId"
 
     fun persona(id: String) = "persona/$id"
     fun personaEdit(id: String?) = "persona_edit?id=${id ?: ""}"
@@ -108,6 +117,11 @@ fun FonarRoot() {
             navController = nav,
             startDestination = start,
             modifier = Modifier.fillMaxSize().background(Fonar.Night).semantics { testTagsAsResourceId = true },
+            // iOS-like: the next screen slides in a little from the right and fades in; back reverses it
+            enterTransition = { fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 6 } },
+            exitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { -it / 12 } },
+            popEnterTransition = { fadeIn(tween(240)) + slideInHorizontally(tween(300, easing = FastOutSlowInEasing)) { -it / 12 } },
+            popExitTransition = { fadeOut(tween(200)) + slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { it / 6 } },
         ) {
             composable(Routes.REGISTER) { RegisterScreen() }
             composable(Routes.LOST) { SessionLostScreen((session as? SessionStore.State.Lost)?.nick) }
@@ -127,6 +141,7 @@ fun FonarRoot() {
                 )
             }
             composable(Routes.CHAT) { e -> ChatScreen(nav, e.arguments!!.getString("roomId")!!) }
+            composable(Routes.ROOM_IMAGES) { e -> app.fonar.ui.chat.ImageSettingsScreen(nav, e.arguments!!.getString("roomId")!!) }
             composable(Routes.PROFILE) { app.fonar.ui.profile.ProfileScreen(nav) }
             composable(Routes.PERSONA) { e -> app.fonar.ui.personas.PersonaScreen(nav, e.arguments!!.getString("id")!!) }
             composable(
@@ -139,7 +154,7 @@ fun FonarRoot() {
         }
         }
         // old accounts without a password: nothing else is reachable until one is set
-        if (passwordGate) {
+        androidx.compose.animation.AnimatedVisibility(passwordGate, enter = fadeIn(tween(250)), exit = fadeOut(tween(250))) {
             androidx.compose.foundation.layout.Box(
                 Modifier.fillMaxSize().background(Fonar.Night)
                     // swallow taps so nothing underneath reacts

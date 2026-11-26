@@ -9,6 +9,7 @@ os.environ.setdefault("LLM_BACKEND", "fake")
 os.environ.setdefault("REPLY_DEBOUNCE_MS", "50")
 os.environ.setdefault("DEFAULT_AI_MODE", "local")
 os.environ.setdefault("CLOUD_RECENT_MESSAGES", "10")  # keeps summary tests short
+os.environ.setdefault("DEMO_CONTENT", "on")  # sample characters and story (production has none)
 
 
 @pytest_asyncio.fixture

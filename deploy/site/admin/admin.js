@@ -94,11 +94,19 @@ async function loadUsers(body) {
       h('td', null, date(u.created_at)), h('td', null, date(u.last_seen_at)),
       h('td', { class: 'num' }, fmt(u.text_tokens)), h('td', { class: 'num' }, fmt(u.avatar_tokens)), h('td', { class: 'num' }, fmt(u.avatars)),
       h('td', { class: 'num' }, fmt(u.photo_tokens)), h('td', { class: 'num' }, fmt(u.scene_photos)), h('td', { class: 'num' }, fmt(u.photos)),
-      h('td', { class: 'num' }, fmt(u.personas)), h('td', { class: 'num' }, fmt(u.rooms)), h('td', { class: 'num' }, money(u.cost)))));
+      h('td', { class: 'num' }, fmt(u.personas)), h('td', { class: 'num' }, fmt(u.rooms)), h('td', { class: 'num' }, money(u.cost)),
+      h('td', null, h('button', { class: 'btn danger small', 'data-delete': u.nick, title: 'Удалить игрока со всеми его данными', onclick: async () => {
+        if (!confirm(`Удалить игрока «${u.nick}» навсегда — вместе с его персонажами, историями, чатами и фото?`)) return;
+        try {
+          await api('/v1/admin/users/' + u.id, 'DELETE');
+          d.users = d.users.filter((x) => x.id !== u.id);
+          draw();
+        } catch (e) { if (e.message !== 'auth') alert(e.message); }
+      } }, 'Удалить')))));
   };
   const head = h('tr', null, cols.map(([k, label, num]) => h('th', { class: num ? 'num' : '', onclick: () => {
     desc = sortKey === k ? !desc : true; sortKey = k; draw();
-  } }, label)));
+  } }, label)), h('th', null, ''));
   draw();
   body.replaceChildren(totals, h('div', { class: 'a-wrap' }, h('table', { class: 'a-table', id: 'users-table' }, h('thead', null, head), tbody)));
 }

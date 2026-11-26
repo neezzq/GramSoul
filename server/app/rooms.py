@@ -34,7 +34,10 @@ class InviteIn(BaseModel):
 
 
 class RoomSettingsIn(BaseModel):
-    ai_mode: str = Field(pattern="^(local|cloud)$")
+    ai_mode: str | None = Field(default=None, pattern="^(local|cloud)$")
+    # pictures of this chat: a style id (see /v1/avatar-styles) and a fixed description of the scenes
+    image_style: str | None = Field(default=None, max_length=32)
+    image_notes: str | None = Field(default=None, max_length=1000)
 
 
 class PhotoIn(BaseModel):
@@ -133,6 +136,8 @@ def room_detail(db: Database, user: User, room) -> dict:
         "seats": seats_of(db, room),
         "scene_location": room["scene_location"],
         "ai_mode": room["ai_mode"] if settings.local_ai else "cloud",
+        "image_style": room["image_style"] or "aesthetic",
+        "image_notes": room["image_notes"] or "",
         "local_available": settings.local_ai,
         "cloud_available": settings.cloud_available,
         "images_available": settings.cloud_available,
@@ -550,9 +555,23 @@ def room_image_allowed(db: Database, user: User, room_pid: str, image_id: str) -
 # AI mode and scene photos
 # ---------------------------------------------------------------------------
 def set_settings(db: Database, user: User, room_pid: str, body: RoomSettingsIn) -> dict:
+    from .personas import AVATAR_STYLES
     room = member_room(db, user, room_pid)
     if room["owner_id"] != user.id:
-        raise ApiError(403, "not_owner", "Переключать ИИ может только хозяин сцены.")
+        raise ApiError(403, "not_owner", "Менять настройки может только хозяин сцены.")
+    if body.image_style is not None or body.image_notes is not None:
+        style = body.image_style if body.image_style is not None else room["image_style"]
+        if style not in AVATAR_STYLES:
+            raise ApiError(400, "bad_style", "Неизвестный стиль.")
+        notes = (body.image_notes if body.image_notes is not None else room["image_notes"]).strip()
+        with db.tx():
+            db.run("UPDATE rooms SET image_style=?, image_notes=? WHERE id=?", (style, notes, room["id"]))
+            _bump(db, room["id"], meta=True)
+        _notify_room(room["id"])
+        room = db.one("SELECT * FROM rooms WHERE id=?", (room["id"],))
+    if body.ai_mode is None:
+        return {"ai_mode": room["ai_mode"] if settings.local_ai else "cloud",
+                "image_style": room["image_style"], "image_notes": room["image_notes"]}
     if body.ai_mode == "local" and not settings.local_ai:
         raise ApiError(400, "local_disabled", "Локальный ИИ отключён: все сцены ведёт облачная модель.")
     if body.ai_mode == "cloud" and not settings.cloud_available:
@@ -563,7 +582,7 @@ def set_settings(db: Database, user: User, room_pid: str, body: RoomSettingsIn) 
             _insert_system(db, room["id"], "ИИ переключён: " + ("облачный" if body.ai_mode == "cloud" else "локальный") + ".")
             _bump(db, room["id"], meta=True)
         _notify_room(room["id"])
-    return {"ai_mode": body.ai_mode}
+    return {"ai_mode": body.ai_mode, "image_style": room["image_style"], "image_notes": room["image_notes"]}
 
 
 def image_job_dict(j) -> dict | None:
@@ -730,3 +749,20 @@ def expire_chat_photos(db: Database) -> int:
     for r in rows:
         delete_chat_photo(db, r["id"], f"Фото удалено: свои фото хранятся {settings.chat_photo_ttl_days} дней.")
     return len(rows)
+
+
+def rename_player(db: Database, user_id: int, old: str, new: str) -> list[int]:
+    """After a nick change: the player's lines that were written under the old nick show the new one.
+    Lines written as a story hero keep the hero's name. Call inside a transaction; returns changed rooms."""
+    rooms = [r["room_id"] for r in db.all(
+        "SELECT DISTINCT room_id FROM messages WHERE user_id=? AND kind='player' AND speaker_name=?", (user_id, old))]
+    for rid in rooms:
+        rev = _bump(db, rid, meta=True)
+        db.run("UPDATE messages SET speaker_name=?, rev=? WHERE room_id=? AND user_id=? AND kind='player' AND speaker_name=?",
+               (new, rev, rid, user_id, old))
+    # rooms where the player only sits (no lines yet) still show the nick in the seat line
+    for r in db.all("SELECT id FROM rooms WHERE (owner_id=? OR guest_id=?)", (user_id, user_id)):
+        if r["id"] not in rooms:
+            _bump(db, r["id"], meta=True)
+            rooms.append(r["id"])
+    return rooms
