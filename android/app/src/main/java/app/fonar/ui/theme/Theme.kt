@@ -73,7 +73,9 @@ private val typography = Typography().let { t ->
     )
 }
 
-val NarratorStyle = TextStyle(fontFamily = Serif, fontSize = 16.sp, lineHeight = 24.sp, color = Color(0xFFEADCE6))
+/** Narration reads like stage directions: light italic, not a heavy block (and the same sans font as the rest). */
+val NarratorStyle = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+    color = Color(0xFFB9AAB4))
 
 @Composable
 fun FonarTheme(content: @Composable () -> Unit) {

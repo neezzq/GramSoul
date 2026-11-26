@@ -49,8 +49,37 @@ import coil3.compose.AsyncImage
 
 /**
  * "*сажусь рядом* Ты чего?" → action in italics (slightly dimmed), speech as plain text.
+ * paragraphs = true puts every action and every spoken part on its own line
+ * (how AI replies read best: "*усмехается*" / "— Молчу…" / "*кивает на парня*" / "— А ты кто?").
  */
-fun actionText(text: String, actionColor: Color = Fonar.Action): AnnotatedString = buildAnnotatedString {
+fun actionText(text: String, actionColor: Color = Fonar.Action, paragraphs: Boolean = false): AnnotatedString =
+    if (paragraphs) actionParagraphs(text, actionColor) else actionInline(text, actionColor)
+
+private fun actionParagraphs(text: String, actionColor: Color): AnnotatedString = buildAnnotatedString {
+    // split into (isAction, part) keeping the model's own line breaks
+    val parts = mutableListOf<Pair<Boolean, String>>()
+    var i = 0
+    while (i < text.length) {
+        val start = text.indexOf('*', i)
+        val end = if (start >= 0) text.indexOf('*', start + 1) else -1
+        if (start < 0 || end < 0) { parts += false to text.substring(i); break }
+        parts += false to text.substring(i, start)
+        parts += true to text.substring(start + 1, end)
+        i = end + 1
+    }
+    var first = true
+    for ((isAction, raw) in parts) {
+        for (piece in raw.split('\n')) {
+            val t = piece.trim()
+            if (t.isEmpty() || t.all { it in ".,;:!?—–-" }) continue
+            if (!first) append("\n")
+            first = false
+            if (isAction) withStyle(SpanStyle(fontStyle = FontStyle.Italic, color = actionColor)) { append(t) } else append(t)
+        }
+    }
+}
+
+private fun actionInline(text: String, actionColor: Color): AnnotatedString = buildAnnotatedString {
     var i = 0
     while (i < text.length) {
         val start = text.indexOf('*', i)

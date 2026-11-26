@@ -159,18 +159,18 @@ def _system_prompt(inp: PromptInput, present: list[str], level: int, rules_lim: 
         lines.append(
             "Отвечай по-русски, живо и подробно: 2–6 строк. Каждая строка начинается с имени и двоеточия. "
             f"«{NARRATOR}: …» — атмосферное описание событий, обстановки и ощущений (2–4 предложения); "
-            "«Имя персонажа: …» — действия в *звёздочках* и реплика строго в его манере речи. "
+            "«Имя персонажа: …» — действия в *звёздочках*, реплика — с тире, строго в его манере речи. "
             "Реагируй на поступки героев конкретно, учитывай, где все находятся, кто рядом и что уже произошло. "
             "Двигай сюжет вперёд, не повторяй уже сказанное. Пример:\n"
             f"{NARRATOR}: Ветер стучит ставнями, пламя свечи дрожит.\n"
-            f"{ex}: *оглядывается и понижает голос* Слышишь? Кажется, кто-то идёт."
+            f"{ex}: *оглядывается и понижает голос* — Слышишь? Кажется, кто-то идёт."
         )
     else:
         lines.append(
             f"Отвечай по-русски, 1–4 строки. Каждая строка начинается с имени и двоеточия. "
-            f"Действия — в *звёздочках*, речь — без них. Пример:\n"
+            f"Действия — в *звёздочках*, реплики — с тире. Пример:\n"
             f"{NARRATOR}: Ветер стучит ставнями, пламя свечи дрожит.\n"
-            f"{ex}: *оглядывается и понижает голос* Слышишь? Кажется, кто-то идёт."
+            f"{ex}: *оглядывается и понижает голос* — Слышишь? Кажется, кто-то идёт."
         )
     if inp.world_rules.strip() and rules_lim > 0:
         lines.append("Мир: " + _clip(inp.world_rules, rules_lim) + ".")
@@ -487,19 +487,29 @@ def card_versions_json(npcs: list[Card], seats: list[Seat]) -> str:
 # ---------------------------------------------------------------------------
 def image_prompt(title: str, world_rules: str, location: str, characters: list[Card], recent: list[HistoryItem],
                  user_prompt: str) -> str:
-    lines = [f"Нарисуй одну иллюстрацию к текущей сцене ролевой истории «{_clip(title, 80)}»."]
+    """What the player asked for comes first and wins; the scene only supplies looks and mood.
+    Everyone in the picture is an adult (all characters are 18+)."""
+    want = user_prompt.strip()
+    if want:
+        lines = [f"Нарисуй одну иллюстрацию: {_clip(want, 300)}.",
+                 "Это главное: рисуй именно то, что просит игрок, даже если это другое место или момент, "
+                 f"чем в текущей сцене ролевой истории «{_clip(title, 80)}». Сцену ниже используй только для "
+                 "внешности персонажей, эпохи и настроения."]
+    else:
+        lines = [f"Нарисуй одну иллюстрацию к текущей сцене ролевой истории «{_clip(title, 80)}»."]
     if world_rules.strip():
         lines.append("Мир и эпоха: " + _clip(world_rules, 350) + ".")
-    if location.strip():
+    if location.strip() and not want:
         lines.append("Место: " + _clip(location, 250) + ".")
     looks = [f"{c.name} — {_clip(c.appearance, 220)}" for c in characters if c.appearance.strip()]
     if looks:
-        lines.append("Внешность персонажей в кадре: " + "; ".join(looks) + ".")
+        lines.append("Внешность персонажей: " + "; ".join(looks) + ".")
     if recent:
         happening = " ".join(_cut(f"{h.speaker}: {h.text}", 220) for h in recent[-5:])
-        lines.append("Что происходит прямо сейчас: " + _clip(happening, 900) + ".")
-    if user_prompt.strip():
-        lines.append("Игрок просит показать: " + _clip(user_prompt, 300) + ".")
+        lines.append(("Для настроения — что было в сцене: " if want else "Что происходит прямо сейчас: ")
+                     + _clip(happening, 500 if want else 900) + ".")
+    lines.append("Все люди на изображении — взрослые (18+), даже если в тексте их называют учениками, "
+                 "студентами, юношами или девушками.")
     lines.append("Стиль: кинематографичная цифровая живопись, выразительный свет, вертикальный кадр. "
                  "Без текста, надписей, подписей и рамок на изображении.")
     return "\n".join(lines)

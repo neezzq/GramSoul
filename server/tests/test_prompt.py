@@ -81,3 +81,20 @@ def test_short_player_lines_do_not_make_everything_a_repeat():
     old = "Ночной город за окном мерцает россыпью огней, где-то на кухне капает кран."
     out = P.parse_output(raw, ["ММ"], ["Ян"], history=[old])
     assert [p.name for p in out] == ["ММ"]
+
+
+def test_photo_prompt_follows_the_player_and_keeps_adults():
+    hist = [P.HistoryItem(1, "character", "Адриан", "*прижимает блондина к двери* — Имя. Быстро.")]
+    p = P.image_prompt("Хеллоу", "Магическая академия", "Коридор у спален", [], hist, "поле, усыпанное цветами")
+    assert p.startswith("Нарисуй одну иллюстрацию: поле, усыпанное цветами.")
+    assert "Коридор у спален" not in p  # the scene place must not override the request
+    assert "взрослые (18+)" in p
+    plain = P.image_prompt("Хеллоу", "", "Коридор у спален", [], hist, "")
+    assert "Место: Коридор у спален." in plain and "взрослые (18+)" in plain
+
+
+def test_style_asks_for_dashes():
+    inp = P.PromptInput(title="T", description="", world_rules="", location="", npcs=[], seats=[], summary="",
+                        history=[], facts=[], mode="reply", num_ctx=2048, num_predict=200)
+    sys_text = P.build(inp).messages[0]["content"]
+    assert "реплики — с тире" in sys_text and "— Слышишь?" in sys_text

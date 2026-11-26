@@ -2,6 +2,7 @@ package app.fonar.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.foundation.combinedClickable
@@ -168,7 +169,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                 title = {
                     Column {
                         Text(room?.title?.ifBlank { null } ?: room?.story?.title ?: "Сцена", maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Serif))
+                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                         if (room != null) Text(if (room.kind == "chat") "Личный чат" else seatLine(room), maxLines = 1, overflow = TextOverflow.Ellipsis,
                             style = MaterialTheme.typography.labelSmall, color = Fonar.Sea, modifier = Modifier.testTag("seat_line"))
                     }
@@ -337,13 +338,14 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
 private fun seatLine(room: RoomDto): String {
     val a = room.seats.getOrNull(0)
     val b = room.seats.getOrNull(1)
-    val first = a?.let { "${it.hero_name} — ${it.user?.nick ?: "?"}" } ?: ""
+    fun seat(heroName: String, nick: String?) = if (nick == null || nick == heroName) heroName else "$heroName — $nick"
+    val first = a?.let { seat(it.hero_name, it.user?.nick) } ?: ""
     val second = when {
-        b?.user != null -> "${b.hero_name} — ${b.user.nick}"
+        b?.user != null -> seat(b.hero_name, b.user.nick)
         room.invite?.status == "pending" -> "ждём ${room.invite.to?.nick ?: "друга"}"
-        else -> "второе место свободно"
+        else -> null
     }
-    return "$first · $second"
+    return if (second == null) first else "$first · $second"
 }
 
 private fun characterById(room: RoomDto, id: String?): CharacterDto? =
@@ -375,7 +377,8 @@ private fun MessageItem(
                     Text(m.speaker_name, color = Fonar.Lamp, fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.clickable { openCard(c?.id) }.padding(bottom = 3.dp).testTag("name_${m.speaker_name}"))
-                    Bubble(m.text, Fonar.CharBubble, RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), m.edited, onLongPress)
+                    Bubble(m.text, Fonar.CharBubble, RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), m.edited, onLongPress,
+                        paragraphs = true)
                 }
             }
         }
@@ -426,10 +429,11 @@ private fun Bubble(
     shape: RoundedCornerShape,
     edited: Boolean = false,
     onLongPress: (() -> Unit)? = null,
+    paragraphs: Boolean = false,
 ) {
     Surface(color = color, shape = shape, modifier = Modifier.clip(shape).longPress(onLongPress)) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(actionText(text), style = MaterialTheme.typography.bodyLarge, color = Fonar.Text)
+            Text(actionText(text, paragraphs = paragraphs), style = MaterialTheme.typography.bodyLarge, color = Fonar.Text)
             if (edited) Text("изменено", style = MaterialTheme.typography.labelSmall, color = Fonar.Faint,
                 modifier = Modifier.padding(top = 2.dp))
         }
@@ -439,14 +443,15 @@ private fun Bubble(
 @Composable
 private fun NarratorBlock(text: String, edited: Boolean = false, onLongPress: (() -> Unit)? = null) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(12.dp)).background(Fonar.NarratorBg)
-            .longPress(onLongPress).testTag("msg_narrator"),
+        Modifier.fillMaxWidth().padding(vertical = 2.dp).clip(RoundedCornerShape(8.dp))
+            .longPress(onLongPress).height(androidx.compose.foundation.layout.IntrinsicSize.Min).testTag("msg_narrator"),
     ) {
-        Box(Modifier.width(3.dp).heightIn(min = 40.dp).background(Fonar.Lamp.copy(alpha = 0.55f)))
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text("РАССКАЗЧИК", style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.4.sp), color = Fonar.Lamp.copy(alpha = 0.7f))
-            Spacer(Modifier.height(4.dp))
-            Text(actionText(text, Fonar.LampSoft.copy(alpha = 0.85f)), style = NarratorStyle)
+        Box(Modifier.width(2.dp).fillMaxHeight().background(Fonar.Lamp.copy(alpha = 0.4f)))
+        Column(Modifier.padding(start = 12.dp, end = 8.dp, top = 2.dp, bottom = 2.dp)) {
+            Text("РАССКАЗЧИК", style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp), color = Fonar.Lamp.copy(alpha = 0.55f))
+            Spacer(Modifier.height(2.dp))
+            Text(actionText(text, NarratorStyle.color, paragraphs = true), style = NarratorStyle)
+            if (edited) Text("изменено", style = MaterialTheme.typography.labelSmall, color = Fonar.Faint)
         }
     }
 }
