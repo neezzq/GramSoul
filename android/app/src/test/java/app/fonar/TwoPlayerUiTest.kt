@@ -97,6 +97,14 @@ class TwoPlayerUiTest {
         compose.onNodeWithTag("password2_input").performTextInput(password)
         compose.onNodeWithTag("start_button").performScrollTo().performClick()
         compose.waitTag("my_nick")
+        compose.waitTag("persona_search")  // the home screen opens on «Персонажи», like the web version
+    }
+
+    /** Stories are inside the «Персонажи» tab (switch «Персонажи | Истории»), like in the web version. */
+    private fun openStories() {
+        compose.onNodeWithTag("tab_characters").performClick()
+        compose.waitTag("kind_stories")
+        compose.onNodeWithTag("kind_stories").performClick()
         compose.waitTag("stories_list")
     }
 
@@ -178,7 +186,7 @@ class TwoPlayerUiTest {
             assertEquals(old.user.id, s.userId)
 
             // profile: about + a new transfer code
-            compose.onNodeWithTag("profile_button").performClick()
+            compose.onNodeWithTag("tab_profile").performClick()
             compose.waitTag("profile_nick")
             compose.waitUntil(10_000) { compose.onAllNodesWithText(nick, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithTag("about_input").performTextInput("Люблю маяки")
@@ -194,7 +202,7 @@ class TwoPlayerUiTest {
             compose.waitText("Код скопирован")
             assertTrue(clipboardText().orEmpty().matches(Regex("[A-Z0-9]{4}-[A-Z0-9]{4}")))
             shot("05b_profile")
-            compose.onNodeWithTag("back").performClick()
+            compose.onNodeWithTag("tab_characters").performClick()
 
             // people search by a part of the nick
             compose.waitTag("tab_friends")
@@ -217,7 +225,7 @@ class TwoPlayerUiTest {
             val api = appApi(app, backend)
             val demo = kotlinx.coroutines.runBlocking { api.stories() }.stories.first { it.is_demo }
             val room = kotlinx.coroutines.runBlocking { api.createRoom(demo.id!!) }.room
-            compose.onNodeWithTag("profile_button").performClick()
+            compose.onNodeWithTag("tab_profile").performClick()
             compose.waitTag("my_room")
             compose.onNodeWithTag("my_rooms").performScrollTo()
             shot("05d_profile_lists")
@@ -297,12 +305,12 @@ class TwoPlayerUiTest {
             assertTrue(img.id.isNotBlank())
             kotlinx.coroutines.runBlocking { api.setAvatar(img.id) }
             // gender: characters address the player by it
-            compose.onNodeWithTag("profile_button").performClick()
+            compose.onNodeWithTag("tab_profile").performClick()
             compose.waitTag("gender_female")
             compose.onNodeWithTag("gender_female").performClick()
             compose.waitUntil(10_000) { kotlinx.coroutines.runBlocking { api.me() }.user.gender == "female" }
             shot("05f_profile_gender")
-            compose.onNodeWithTag("back").performClick()
+            compose.onNodeWithTag("tab_characters").performClick()
             // a private character with a chat can be published from its page
             val p = kotlinx.coroutines.runBlocking {
                 api.createPersona(PersonaReq("Лиса", "*Лиса щурится* — Ну привет.", "рыжая", "", "",
@@ -318,7 +326,7 @@ class TwoPlayerUiTest {
             compose.waitText("Сделать личным")
             compose.onNodeWithTag("back").performClick()
             // stories of others: «Общие» → play → the player gets an own copy
-            compose.onNodeWithTag("tab_stories").performClick()
+            openStories()
             compose.waitTag("stories_public")
             compose.onNodeWithTag("stories_public").performClick()
             compose.onNodeWithTag("stories_list").performScrollToNode(hasTestTag("play_$title"))
@@ -463,7 +471,7 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("back").performClick()
             compose.waitTag("persona_card_Ветта")
             // version in the profile
-            compose.onNodeWithTag("profile_button").performClick()
+            compose.onNodeWithTag("tab_profile").performClick()
             compose.waitTag("app_version")
         }
     }
@@ -492,7 +500,7 @@ class TwoPlayerUiTest {
             // B has just been active → shown online
             compose.waitTag("online_${b.user.nick}")
             // "Играть с другом" on the demo story
-            compose.onNodeWithTag("tab_stories").performClick()
+            openStories()
             compose.waitTag("play_friend_Маяк на Стеклянном берегу")
             compose.onNodeWithTag("play_friend_Маяк на Стеклянном берегу").performClick()
             compose.waitTag("pick_${b.user.nick}")
@@ -612,7 +620,7 @@ class TwoPlayerUiTest {
             val demo = a.call { stories() }.stories.first { it.is_demo }
             val room = a.call { createRoom(demo.id!!) }.room
             a.call { invite(room.id, (app.graph.me)!!.id) }
-            compose.onNodeWithTag("tab_scenes").performClick()
+            compose.onNodeWithTag("tab_chats").performClick()
             compose.waitTag("invite_card", 30_000)
             shot("10_invite")
             compose.onNodeWithTag("invite_accept").performClick()
@@ -640,6 +648,7 @@ class TwoPlayerUiTest {
         val nick = uniq("Tim")
         ActivityScenario.launch(MainActivity::class.java).use {
             register(nick)
+            openStories()
             compose.onNodeWithTag("stories_list").performScrollToNode(hasTestTag("play_Маяк на Стеклянном берегу"))
             compose.onNodeWithTag("play_Маяк на Стеклянном берегу").performClick()
             compose.waitTag("chat_input")

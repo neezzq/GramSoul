@@ -71,7 +71,7 @@ private fun errText(e: Exception) = if (e is ApiException) e.message else "Не�
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileScreen(nav: NavHostController) {
+fun ProfileScreen(nav: NavHostController, asTab: Boolean = false) {
     val graph = LocalContext.current.graph
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -120,7 +120,7 @@ fun ProfileScreen(nav: NavHostController) {
             TopAppBar(
                 title = { Text("Профиль") },
                 navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("back")) {
+                    if (!asTab) IconButton(onClick = { nav.popBackStack() }, modifier = Modifier.testTag("back")) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
                     }
                 },

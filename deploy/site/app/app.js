@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.4';
+const WEB_VERSION = '1.5';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -539,7 +539,31 @@ function createSheet() {
     h('button', { class: 'list-item', id: 'create-persona-item', onclick: () => { s.close(); location.hash = '#/persona-edit'; } }, icon('face'),
       h('div', { class: 'grow' }, h('div', { class: 't' }, 'Персонажа'), h('div', { class: 's' }, 'Один герой для личного чата'))),
     h('button', { class: 'list-item', id: 'create-story-item', onclick: () => { s.close(); location.hash = '#/story-edit'; } }, icon('book'),
-      h('div', { class: 'grow' }, h('div', { class: 't' }, 'Историю'), h('div', { class: 's' }, 'Мир, несколько персонажей, место и первая сцена — можно играть с другом'))));
+      h('div', { class: 'grow' }, h('div', { class: 't' }, 'Историю'), h('div', { class: 's' }, 'Мир, несколько персонажей, место и первая сцена — можно играть с другом'))),
+    h('button', { class: 'list-item', id: 'create-quick-item', onclick: () => { s.close(); quickStorySheet(); } }, icon('forward'),
+      h('div', { class: 'grow' }, h('div', { class: 't' }, 'Быструю историю'), h('div', { class: 's' }, 'Один персонаж и первая реплика — за минуту'))));
+}
+
+/** The quick story: a character, how they talk and the first line; the rest is filled in by the server. */
+function quickStorySheet() {
+  const name = h('input', { class: 'field', id: 'q-name', maxlength: 40, placeholder: 'Имя персонажа' });
+  const pers = autoGrow(h('textarea', { class: 'field', id: 'q-pers', rows: 2, maxlength: 1500, placeholder: 'Характер: тихая, упрямая, боится темноты…' }), 140);
+  const speech = h('input', { class: 'field', id: 'q-speech', maxlength: 1000, placeholder: 'Манера речи: коротко, полушёпотом…' });
+  const line = autoGrow(h('textarea', { class: 'field', id: 'q-line', rows: 2, maxlength: 1500, placeholder: '*Он поднимает взгляд* — Ты всё-таки пришёл.' }), 140);
+  const err = h('div', { class: 'error' });
+  const go = h('button', { class: 'btn primary wide', id: 'q-create', style: 'margin-top:12px' }, 'Создать и открыть');
+  go.addEventListener('click', async () => {
+    if (!name.value.trim()) { err.textContent = 'Напиши имя персонажа.'; return; }
+    go.disabled = true;
+    try {
+      const r = await api('/v1/stories/quick', { method: 'POST', body: { name: name.value.trim(), personality: pers.value.trim(), speech_style: speech.value.trim(), start_line: line.value.trim() } });
+      sh.close();
+      location.hash = '#/story/' + r.story.id;
+    } catch (e) { err.textContent = e.message; go.disabled = false; }
+  });
+  const sh = sheet('Быстрая история', name, h('label', { class: 'lbl' }, 'Характер'), pers, h('label', { class: 'lbl' }, 'Манера речи'), speech,
+    h('label', { class: 'lbl' }, 'Первая реплика'), line, err, go);
+  name.focus();
 }
 
 function storyCover(st) {
@@ -572,7 +596,10 @@ function screenCharacters(root) {
       const r = await api(`/v1/personas?q=${encodeURIComponent(q)}&scope=${scope}`);
       if (my !== seq) return;
       grid.replaceChildren(...r.personas.map(personaCard));
-      if (!r.personas.length) grid.append(h('div', { class: 'muted' }, scope === 'drafts' ? 'Черновиков нет.' : 'Ничего не нашли.'));
+      if (!r.personas.length) grid.append(h('div', { class: 'muted', id: 'personas-empty' },
+        scope === 'drafts' ? 'Черновиков нет.' : q ? 'Ничего не нашли.'
+          : scope === 'mine' ? 'У тебя пока нет персонажей — создай первого.'
+            : 'Пока нет персонажей. Создай своего — или загляни позже, когда другие опубликуют.'));
     } catch (e) {
       if (my === seq) grid.replaceChildren(errorBox(e.message, load));
     }

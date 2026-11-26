@@ -350,7 +350,8 @@ def main():
     ok("request accepted, A sees status 'принята'", True)
 
     # 4. A: «Играть с другом» on the demo story
-    tap_id(A, "tab_stories")
+    tap_id(A, "tab_characters")  # stories live inside «Персонажи», like in the web version
+    tap_id(A, "kind_stories")
     try:
         tap_id(A, f"play_friend_{DEMO}", timeout=15)
     except TimeoutError:  # below the fold on a short screen
@@ -361,7 +362,7 @@ def main():
     wait(A, rid="chat_input", timeout=60)
     shot(A, "06_chat_waiting")
 
-    tap_id(B, "tab_scenes")
+    tap_id(B, "tab_chats")
     wait(B, rid="invite_card", timeout=60)
     shot(B, "07_invite")
     tap_id(B, "invite_accept")
@@ -458,7 +459,7 @@ def main():
     adb(B, "shell", "am", "force-stop", PKG)
     launch(B)
     wait(B, rid="my_nick", timeout=30)
-    tap_id(B, "tab_scenes")
+    tap_id(B, "tab_chats")
     tap_id(B, f"room_{DEMO}")
     wait(B, rid="chat_input", timeout=30)
     ok("B relaunched: signed in automatically", True)

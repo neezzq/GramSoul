@@ -103,7 +103,8 @@ import app.fonar.ui.components.SectionTitle
 import app.fonar.ui.components.exposeTags
 import app.fonar.ui.theme.Fonar
 
-private enum class Tab(val title: String) { STORIES("Истории"), CHARACTERS("Персонажи"), SCENES("Сцены"), FRIENDS("Друзья") }
+// the same tabs as the web version: stories live inside «Персонажи» (switch «Персонажи | Истории»)
+private enum class Tab(val title: String) { CHARACTERS("Персонажи"), CHATS("Чаты"), FRIENDS("Друзья"), PROFILE("Профиль") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,7 +112,8 @@ fun HomeScreen(nav: NavHostController) {
     val graph = LocalContext.current.graph
     val vm: HomeViewModel = viewModel { HomeViewModel(graph) }
     val state by vm.state.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableStateOf(Tab.STORIES) }
+    var tab by rememberSaveable { mutableStateOf(Tab.CHARACTERS) }
+    var kind by rememberSaveable { mutableStateOf(0) }  // in «Персонажи»: 0 = characters, 1 = stories
     val snackbar = remember { SnackbarHostState() }
     var pickFriendFor by remember { mutableStateOf<StoryDto?>(null) }
 
@@ -125,7 +127,7 @@ fun HomeScreen(nav: NavHostController) {
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            if (tab != Tab.PROFILE) TopAppBar(
                 title = {
                     Column {
                         Text(
@@ -137,12 +139,6 @@ fun HomeScreen(nav: NavHostController) {
                         )
                         Text(graph.me?.nick ?: "", style = MaterialTheme.typography.labelMedium, color = Fonar.Muted,
                             modifier = Modifier.testTag("my_nick"))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { nav.navigate(Routes.PROFILE) { launchSingleTop = true } },
-                        modifier = Modifier.testTag("profile_button")) {
-                        Icon(Icons.Outlined.AccountCircle, "Профиль", tint = Fonar.Lamp)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Fonar.Night),
@@ -157,7 +153,7 @@ fun HomeScreen(nav: NavHostController) {
                 ) {
                     Tab.entries.forEach { t ->
                         val badge = when (t) {
-                            Tab.SCENES -> state.invites.size
+                            Tab.CHATS -> state.invites.size
                             Tab.FRIENDS -> state.friends.incoming.size
                             else -> 0
                         }
@@ -172,10 +168,10 @@ fun HomeScreen(nav: NavHostController) {
                             BadgedBox(badge = { if (badge > 0) Badge(containerColor = Fonar.Lamp, contentColor = Fonar.OnLamp) { Text("$badge") } }) {
                                 Icon(
                                     when (t) {
-                                        Tab.STORIES -> Icons.AutoMirrored.Outlined.MenuBook
                                         Tab.CHARACTERS -> Icons.Outlined.Face
-                                        Tab.SCENES -> Icons.Outlined.Forum
+                                        Tab.CHATS -> Icons.Outlined.Forum
                                         Tab.FRIENDS -> Icons.Outlined.Group
+                                        Tab.PROFILE -> Icons.Outlined.AccountCircle
                                     }, null,
                                     tint = if (selected) Fonar.Lamp else Fonar.Muted,
                                     modifier = Modifier.size(24.dp),
@@ -202,10 +198,18 @@ fun HomeScreen(nav: NavHostController) {
                 },
             ) { t ->
                 when (t) {
-                    Tab.STORIES -> StoriesTab(state, vm, nav, onPlayWithFriend = { pickFriendFor = it }, onOpenInvites = { tab = Tab.SCENES })
-                    Tab.CHARACTERS -> app.fonar.ui.personas.PersonasTab(nav)
-                    Tab.SCENES -> ScenesTab(state, vm, nav)
+                    Tab.CHARACTERS -> Column(Modifier.fillMaxSize()) {
+                        app.fonar.ui.components.Segmented(
+                            listOf("Персонажи", "Истории"), kind, { kind = it },
+                            tags = listOf("kind_personas", "kind_stories"),
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp),
+                        )
+                        if (kind == 0) app.fonar.ui.personas.PersonasTab(nav)
+                        else StoriesTab(state, vm, nav, onPlayWithFriend = { pickFriendFor = it }, onOpenInvites = { tab = Tab.CHATS })
+                    }
+                    Tab.CHATS -> ScenesTab(state, vm, nav)
                     Tab.FRIENDS -> FriendsTab(state, vm)
+                    Tab.PROFILE -> app.fonar.ui.profile.ProfileScreen(nav, asTab = true)
                 }
             }
         }
@@ -288,8 +292,17 @@ private fun StoriesTab(
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.testTag("stories_list")) {
         item {
-            app.fonar.ui.components.Segmented(listOf("Мои истории", "Общие"), scope, { scope = it },
-                tags = listOf("stories_mine", "stories_public"))
+            // chips, like in the web version (one big switch above is enough)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("Мои" to "stories_mine", "Общие" to "stories_public").forEachIndexed { i, (label, tag) ->
+                    androidx.compose.material3.FilterChip(
+                        selected = scope == i, onClick = { scope = i }, label = { Text(label) },
+                        colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Fonar.Lamp.copy(alpha = 0.22f), selectedLabelColor = Fonar.Text),
+                        modifier = Modifier.testTag(tag),
+                    )
+                }
+            }
         }
         if (scope == 1) {
             val list = state.publicStories

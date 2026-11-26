@@ -173,7 +173,12 @@ fun PersonasTab(nav: NavHostController) {
                 }
                 if (s.items.isEmpty()) item(span = { GridItemSpan(2) }) {
                     Text(
-                        if (s.scope == "drafts") "Черновиков нет." else "Ничего не нашли.",
+                        when {
+                            s.scope == "drafts" -> "Черновиков нет."
+                            query.isNotBlank() -> "Ничего не нашли."
+                            s.scope == "mine" -> "У тебя пока нет персонажей — создай первого."
+                            else -> "Пока нет персонажей. Создай своего — или загляни позже, когда другие опубликуют."
+                        },
                         color = Fonar.Muted, modifier = Modifier.padding(top = 12.dp).testTag("personas_empty"),
                     )
                 }
