@@ -20,6 +20,15 @@
 		}
 	}
 
+	# web version (iPhone: «Поделиться» → «На экран „Домой“»). Same origin as the API.
+	redir /app /app/ 308
+	@app path /app/*
+	header @app {
+		Cache-Control "no-cache"
+		Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+		X-Frame-Options "DENY"
+	}
+
 	# installable APK + a tiny landing page for friends
 	@apk path *.apk
 	header @apk Content-Type "application/vnd.android.package-archive"

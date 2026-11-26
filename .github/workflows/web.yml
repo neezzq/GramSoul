@@ -1,0 +1,37 @@
+name: Web app
+
+# The browser version at https://<domain>/app/ (iPhone: «На экран „Домой“»), checked in an
+# iPhone-sized Chromium against the API with the fake model.
+on:
+  push:
+    paths: ["deploy/site/**", "server/**", "tools/web_dev.py", "tools/web_e2e.js", ".github/workflows/web.yml"]
+  workflow_dispatch:
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - name: API + web app on one origin
+        run: |
+          pip install -q -r server/requirements.txt
+          mkdir -p /tmp/webdata
+          (cd server && DATA_DIR=/tmp/webdata LLM_BACKEND=fake REPLY_DEBOUNCE_MS=300 RL_REGISTER_PER_HOUR=1000 \
+             nohup python3 ../tools/web_dev.py 8010 > /tmp/web.log 2>&1 &)
+          for i in $(seq 1 30); do curl -fs localhost:8010/app/ >/dev/null && break; sleep 1; done
+      - name: Playwright
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: iPhone-sized browser scenario
+        run: node tools/web_e2e.js http://127.0.0.1:8010 web-screens
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: web-screens, path: web-screens, if-no-files-found: ignore }
+      - if: failure()
+        run: tail -n 60 /tmp/web.log || true

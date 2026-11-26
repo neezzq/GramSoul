@@ -2,20 +2,24 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GramSoul — истории на двоих</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GramSoul — ролевые чаты с ИИ</title>
+<meta name="theme-color" content="#000000">
+<link rel="apple-touch-icon" href="/app/icon-180.png">
 <style>
-  :root { --bg:#0A090C; --card:#17121A; --text:#F4E9F0; --muted:#A796A3; --accent:#FF4FA3; --accent2:#FF8CC6; }
+  :root { --bg:#000; --card:#1c1c1e; --text:#fff; --muted:#a1a1a8; --accent:#ff8cc6; --on:#240816; }
   * { box-sizing: border-box; }
-  body { margin:0; min-height:100vh; background:radial-gradient(circle at 50% -10%, #3d0f27 0%, var(--bg) 55%); color:var(--text);
-         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; display:flex; align-items:center; justify-content:center; padding:24px 16px; }
+  body { margin:0; min-height:100vh; background:radial-gradient(circle at 50% 12%, rgba(255,140,198,.16), transparent 55%), var(--bg); color:var(--text);
+         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif; display:flex; align-items:center; justify-content:center; padding:24px 16px; }
   main { max-width:440px; width:100%; text-align:center; }
-  .orb { width:84px; height:84px; margin:0 auto 18px; border-radius:50%; background:radial-gradient(circle, #FFD1E8 0%, var(--accent) 38%, rgba(255,79,163,0) 70%); }
-  h1 { font-weight:800; font-size:36px; letter-spacing:.5px; margin:0 0 6px; }
-  h1 span { color: var(--accent); }
-  p { color:var(--muted); line-height:1.5; margin:0 0 22px; }
-  a.btn { display:block; background:linear-gradient(90deg, var(--accent), var(--accent2)); color:#1a0710; text-decoration:none; font-weight:800; padding:16px; border-radius:14px; font-size:18px; }
-  .card { background:var(--card); border:1px solid #2a1f2b; border-radius:16px; padding:16px 18px; margin-top:22px; text-align:left; color:var(--muted); font-size:14px; line-height:1.55; }
+  .orb { width:88px; height:88px; margin:0 auto 16px; border-radius:50%; background:radial-gradient(circle, #ffd8ea 0%, rgba(255,140,198,.75) 38%, rgba(255,140,198,0) 70%); }
+  h1 { font-weight:800; font-size:40px; letter-spacing:-.5px; margin:0 0 6px; }
+  h1 span { color: var(--accent); text-shadow:0 0 22px rgba(255,140,198,.55); }
+  p { color:var(--muted); line-height:1.5; margin:0 0 24px; }
+  a.btn { display:block; text-decoration:none; font-weight:700; padding:16px; border-radius:999px; font-size:18px; margin-top:12px; }
+  a.primary { background:var(--accent); color:var(--on); box-shadow:0 0 18px rgba(255,140,198,.45); }
+  a.ghost { border:1px solid rgba(255,255,255,.18); color:var(--text); }
+  .card { background:var(--card); border-radius:22px; padding:16px 18px; margin-top:22px; text-align:left; color:var(--muted); font-size:14px; line-height:1.55; }
   .card b { color:var(--text); }
 </style>
 </head>
@@ -23,14 +27,16 @@
 <main>
   <div class="orb"></div>
   <h1>Gram<span>Soul</span></h1>
-  <p>Ролевые истории на двоих с живым ИИ‑рассказчиком.</p>
-  <a class="btn" href="/fonar.apk" download="GramSoul.apk">Скачать для Android</a>
+  <p>Ролевые чаты с ИИ-персонажами вместе с друзьями.</p>
+  <a class="btn primary" href="/app/">Открыть в браузере · iPhone</a>
+  <a class="btn ghost" href="/fonar.apk" download="GramSoul.apk">Скачать для Android</a>
   <div class="card">
-    <b>Как установить</b><br>
-    1. Нажми «Скачать» и открой файл <b>GramSoul.apk</b>.<br>
-    2. Если Android спросит — разреши установку из этого источника.<br>
-    3. Открой GramSoul, введи свой ник — и всё.<br><br>
-    Обновления ставятся поверх: ник и истории сохраняются.
+    <b>iPhone</b><br>
+    Открой эту страницу в Safari, нажми «Открыть в браузере», затем «Поделиться» ⬆︎ → «На экран „Домой“».
+    GramSoul появится иконкой и будет открываться на весь экран, как приложение.<br><br>
+    <b>Android</b><br>
+    Скачай <b>GramSoul.apk</b>, открой файл и разреши установку из этого источника. Обновления ставятся поверх.<br><br>
+    Аккаунт один: войти с другого устройства можно по коду переноса из профиля.
   </div>
 </main>
 </body>

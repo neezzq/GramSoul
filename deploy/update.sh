@@ -8,6 +8,8 @@ BRANCH="$(git -C .. rev-parse --abbrev-ref HEAD)"
 git -C .. fetch --depth 1 origin "$BRANCH"
 git -C .. checkout -q -B "$BRANCH" FETCH_HEAD
 $DC up -d --build --remove-orphans
+# Caddyfile is a bind mount: apply its changes without dropping connections
+$DC exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || $DC restart caddy
 MODEL="$(grep -E '^LLM_MODEL=' .env | cut -d= -f2- | awk '{print $1}')"
 $DC exec -T ollama ollama pull "${MODEL:-qwen2.5:0.5b}"
 $DC restart api
