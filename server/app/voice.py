@@ -117,7 +117,7 @@ async def synthesize(text: str, spec: VoiceSpec, narrator: bool = False) -> Spee
     voice = spec.voice if spec.voice in VOICE_IDS else (settings.tts_narrator_voice if narrator else settings.tts_default_voice)
     spec = VoiceSpec(voice, spec.manner, spec.timbre)
     instr = instructions(spec, narrator)
-    path = cache_path(settings.tts_model, spec, instr, text)
+    path = cache_path(current_model(), spec, instr, text)
     try:
         with open(path, "rb") as f:
             return SpeechResult(f.read(), 0, cached=True)
@@ -135,13 +135,91 @@ async def synthesize(text: str, spec: VoiceSpec, narrator: bool = False) -> Spee
     return SpeechResult(data, len(text), cost=len(text) / 1_000_000 * settings.tts_usd_per_mchar)
 
 
+# The speech model actually used: TTS_MODEL when OpenRouter has it, otherwise the best match from OpenRouter's
+# own list of speech models (model ids there change: dated variants appear and disappear).
+_resolved: dict = {"model": None, "voices": None, "at": 0.0}
+_PREFER = ("gpt-4o-mini-tts", "openai/", "tts")
+
+
+def current_model() -> str:
+    return _resolved["model"] or settings.tts_model
+
+
+def _error_text(r: httpx.Response) -> str:
+    try:
+        msg = (r.json().get("error") or {}).get("message") or r.text
+    except Exception:
+        msg = r.text
+    return " ".join(str(msg).split())[:200]
+
+
+async def _speech_models(client: httpx.AsyncClient, base: str, headers: dict) -> list[dict]:
+    """[{id, voices}] of the speech models OpenRouter offers."""
+    for path in ("/audio/speech/models", "/models?output_modalities=speech"):
+        try:
+            r = await client.get(base + path, headers=headers)
+            if r.status_code != 200:
+                continue
+            data = r.json().get("data") or []
+            out = []
+            for m in data:
+                mid = m.get("id") or m.get("slug")
+                if not mid:
+                    continue
+                voices = m.get("supported_voices")
+                if voices is None:
+                    for ep in m.get("endpoints") or []:
+                        voices = voices or ep.get("supported_voices")
+                out.append({"id": mid, "voices": [str(v) for v in voices] if voices else None})
+            if out:
+                return out
+        except (httpx.HTTPError, ValueError):
+            continue
+    return []
+
+
+async def _resolve_model(client: httpx.AsyncClient, base: str, headers: dict, force: bool = False) -> None:
+    if not force and _resolved["model"] and time.time() - _resolved["at"] < 6 * 3600:
+        return
+    models = await _speech_models(client, base, headers)
+    if not models:
+        return
+    ids = [m["id"] for m in models]
+    pick = None
+    if settings.tts_model in ids:
+        pick = settings.tts_model
+    else:
+        for key in _PREFER:
+            pick = next((i for i in ids if key in i), None)
+            if pick:
+                break
+        pick = pick or ids[0]
+    _resolved.update(model=pick, voices=next(m["voices"] for m in models if m["id"] == pick), at=time.time())
+    if pick != settings.tts_model:
+        log.warning("TTS_MODEL %s is not offered; using %s", settings.tts_model, pick)
+
+
 async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
     base = (settings.tts_base_url or settings.openrouter_base_url).rstrip("/")
     headers = {"Authorization": f"Bearer {settings.tts_key}", "X-Title": "GramSoul", "Content-Type": "application/json"}
-    body = {"model": settings.tts_model, "input": text, "voice": voice, "response_format": "mp3", "instructions": instr}
+
+    def body_for() -> dict:
+        v = voice
+        known = _resolved["voices"]
+        if known and v not in known:  # this model has other voices: take the closest neutral one
+            v = next((x for x in (settings.tts_default_voice, "alloy") if x in known), known[0])
+        return {"model": current_model(), "input": text, "voice": v, "response_format": "mp3", "instructions": instr}
+
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)) as client:
         try:
+            await _resolve_model(client, base, headers)
+            body = body_for()
             r = await client.post(base + "/audio/speech", json=body, headers=headers)
+            if r.status_code in (400, 404) and "exist" in r.text.lower():
+                # the model name went out of date: read OpenRouter's list again and retry once
+                await _resolve_model(client, base, headers, force=True)
+                body = body_for()
+                r = await client.post(base + "/audio/speech", json=body, headers=headers)
             if r.status_code in (400, 422) and "instruction" in r.text.lower():
                 body.pop("instructions")  # a model without style instructions: plain voice
                 r = await client.post(base + "/audio/speech", json=body, headers=headers)
@@ -155,7 +233,7 @@ async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
         raise ApiError(429, "voice_busy", "Сервис озвучки занят. Попробуй через минуту.")
     if r.status_code >= 400:
         log.warning("tts %s: %s", r.status_code, r.text[:300])
-        raise ApiError(502, "voice_failed", f"Озвучка не получилась (ошибка {r.status_code}).")
+        raise ApiError(502, "voice_failed", f"Озвучка не получилась: {_error_text(r)} (ошибка {r.status_code}).")
     ctype = r.headers.get("content-type", "")
     if "json" in ctype or len(r.content) < 200:
         log.warning("tts unexpected answer %s: %s", ctype, r.text[:200])

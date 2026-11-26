@@ -206,3 +206,41 @@ async def test_style_change_drops_previous_frame(client):
     assert "важнее любых приложенных картинок" in p["prompt"] and "anime" in p["prompt"]
     await draw()
     assert "предыдущий кадр" in last_prompt()["prompt"]  # same style again: continuity is back
+
+
+async def test_voice_over_through_http_picks_an_offered_model(client, monkeypatch):
+    """The real HTTP path against a local stand-in for OpenRouter: an outdated TTS_MODEL is replaced by the
+    model OpenRouter actually offers, and a provider error reaches the player in plain words."""
+    import os, socket, sys, threading
+    from http.server import ThreadingHTTPServer
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "tools"))
+    import mock_openrouter
+    import app.main as main
+    import app.voice as V
+    sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+    srv = ThreadingHTTPServer(("127.0.0.1", port), mock_openrouter.H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        s = main.settings
+        monkeypatch.setattr(s, "llm_backend", "openrouter")
+        monkeypatch.setattr(s, "tts_api_key", "sk-or-mock")
+        monkeypatch.setattr(s, "tts_base_url", f"http://127.0.0.1:{port}/api/v1")
+        monkeypatch.setattr(s, "tts_model", "openai/gpt-4o-mini-tts-2025-12-15")  # what the server had: not offered
+        monkeypatch.setattr(V, "settings", s)
+        monkeypatch.setattr(V, "_resolved", {"model": None, "voices": None, "at": 0.0})
+        h, _ = await register(client, "Голос")
+        r = await client.post("/v1/voice/preview", json={"voice": "onyx", "manner": "устало", "text": "Конечная не скоро."}, headers=h)
+        assert r.status_code == 200 and r.headers["content-type"] == "audio/mpeg" and len(r.content) > 1000
+        assert V.current_model() == "openai/gpt-4o-mini-tts"
+        assert (await client.get("/v1/health")).json()["voice_model"] == "openai/gpt-4o-mini-tts"
+        # a model that was dropped later: re-read the list and retry once
+        monkeypatch.setattr(V, "_resolved", {"model": "openai/old-tts", "voices": None, "at": __import__("time").time()})
+        r = await client.post("/v1/voice/preview", json={"voice": "nova", "text": "Другая фраза."}, headers=h)
+        assert r.status_code == 200 and V.current_model() == "openai/gpt-4o-mini-tts"
+        # nothing offered at all: the player sees OpenRouter's own reason
+        monkeypatch.setattr(mock_openrouter, "SPEECH_MODELS", [])
+        monkeypatch.setattr(V, "_resolved", {"model": None, "voices": None, "at": 0.0})
+        r = await client.post("/v1/voice/preview", json={"voice": "nova", "text": "Третья фраза."}, headers=h)
+        assert r.status_code == 502 and "does not exist" in r.json()["detail"]["message"]
+    finally:
+        srv.shutdown()

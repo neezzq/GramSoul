@@ -95,7 +95,7 @@ class Settings:
     # TTS_API_KEY is optional: a separate OpenRouter key with its own spending limit; else OPENROUTER_API_KEY.
     tts_api_key: str = field(default_factory=lambda: _env("TTS_API_KEY", "").strip())
     tts_base_url: str = field(default_factory=lambda: _env("TTS_BASE_URL", ""))
-    tts_model: str = field(default_factory=lambda: _env("TTS_MODEL", "openai/gpt-4o-mini-tts-2025-12-15"))
+    tts_model: str = field(default_factory=lambda: _env("TTS_MODEL", "openai/gpt-4o-mini-tts"))
     tts_default_voice: str = field(default_factory=lambda: _env("TTS_DEFAULT_VOICE", "alloy"))
     tts_narrator_voice: str = field(default_factory=lambda: _env("TTS_NARRATOR_VOICE", "sage"))
     tts_usd_per_mchar: float = field(default_factory=lambda: _float("TTS_USD_PER_MCHAR", 0.6))  # for the admin estimate

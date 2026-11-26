@@ -92,7 +92,7 @@ async def health():
             "model": settings.llm_model if settings.local_ai else None,
             "model_ready": (await llm.model_available()) if settings.local_ai else None,
             "cloud": bool(settings.openrouter_api_key), "cloud_model": settings.cloud_text_model,
-            "image_model": settings.cloud_image_model, "voice": settings.tts_available, "voice_model": settings.tts_model,
+            "image_model": settings.cloud_image_model, "voice": settings.tts_available, "voice_model": V.current_model(),
             "queue": state.worker.queue_length(), "busy": state.worker.busy}
 
 
@@ -896,7 +896,7 @@ async def voice_preview(body: VoicePreviewIn, user: User = Depends(current_user)
     v, m, t = V.normalize(body.voice, body.manner, body.timbre)
     text = body.text.strip() or "Привет. Так звучит мой голос — надеюсь, тебе нравится."
     res = await V.synthesize(text, V.VoiceSpec(v, m, t))
-    usage.record(d, user.id, "voice", settings.tts_model, res)
+    usage.record(d, user.id, "voice", V.current_model(), res)
     return _audio(res)
 
 
@@ -929,7 +929,7 @@ async def message_speech(room_id: str, message_id: str, user: User = Depends(cur
     else:
         text = " ".join(V.spoken_parts(m["text"])).strip()
     res = await V.synthesize(text, spec, narrator=narrator)
-    usage.record(d, user.id, "voice", settings.tts_model, res)
+    usage.record(d, user.id, "voice", V.current_model(), res)
     return _audio(res)
 
 

@@ -16,6 +16,12 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 COUNTER = itertools.count(1)
+# speech models like OpenRouter lists them (an unknown model id gets 400 «Model … does not exist»)
+SPEECH_MODELS = [
+    {"id": "openai/gpt-4o-mini-tts", "supported_voices": ["alloy", "ash", "ballad", "cedar", "coral", "echo", "fable",
+                                                         "marin", "nova", "onyx", "sage", "shimmer", "verse"]},
+    {"id": "google/gemini-3.1-flash-tts-preview", "supported_voices": ["Kore", "Puck"]},
+]
 PLACES = ["Туман за окнами отступает, линза отражает далёкие огни", "Где-то внизу хлопает ставня, ветер несёт соль",
           "Лампа мигает, по стенам ползут длинные тени", "С моря доносится гудок, ступени скрипят под ногами",
           "Дождь стучит по стеклу, в углу тлеют угли", "Над водой встаёт луна, маяк медленно поворачивает луч"]
@@ -50,6 +56,8 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.path.endswith("/audio/speech/models"):
+            return self._json(200, {"data": SPEECH_MODELS})
         if self.path.endswith("/key"):
             return self._json(200, {"data": {"limit": None, "usage": 0}})
         self._json(404, {"error": {"message": "not found"}})
@@ -59,6 +67,8 @@ class H(BaseHTTPRequestHandler):
             return self._json(401, {"error": {"message": "bad key"}})
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         n = next(COUNTER)
+        if self.path.endswith("/audio/speech") and body.get("model") not in {m["id"] for m in SPEECH_MODELS}:
+            return self._json(400, {"error": {"message": f"Model {body.get('model')} does not exist", "code": 400}})
         if self.path.endswith("/audio/speech"):  # voice-over: a short silent MP3
             data = (bytes([0xFF, 0xFB, 0x90, 0x64]) + bytes(413)) * 20
             self.send_response(200)
