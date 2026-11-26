@@ -1,40 +1,54 @@
 // End-to-end check of the web app (iPhone viewport) against tools/web_dev.py with the fake model.
-//   node tools/web_e2e.js http://127.0.0.1:8010 out_dir
+//   ADMIN_PASSWORD=… node tools/web_e2e.js http://127.0.0.1:8010 out_dir
 const { chromium, devices } = require('playwright');
 const fs = require('fs');
+const path = require('path');
 
 const base = process.argv[2] || 'http://127.0.0.1:8010';
 const out = process.argv[3] || 'web-screens';
+const adminPassword = process.env.ADMIN_PASSWORD || '';
 fs.mkdirSync(out, { recursive: true });
 const phone = devices['iPhone 15 Pro'] || devices['iPhone 14 Pro'] || devices['iPhone 13'];
 const results = [];
 const ok = (name, cond, info = '') => { results.push([name, !!cond]); console.log((cond ? 'OK   ' : 'FAIL ') + name + (info ? ' — ' + info : '')); };
 const uniq = (p) => p + '_' + (Date.now() % 100000);
+// a tiny PNG for "send my own photo"
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const pngPath = path.join(out, 'own-photo.png');
+fs.writeFileSync(pngPath, PNG);
 
-async function apiAs(token, path, method = 'GET', body) {
-  const r = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
+async function apiAs(token, p, method = 'GET', body) {
+  const r = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body ? JSON.stringify(body) : undefined });
   return r.json();
 }
 
 (async () => {
   const browser = await chromium.launch();
-  const ctx = await browser.newContext({ ...phone });
+  const ctx = await browser.newContext({ ...phone, permissions: ['clipboard-read', 'clipboard-write'] });
   const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', (e) => errors.push(String(e)));
-  page.on('console', (m) => { if (m.type() === 'error' && !/status of 4\d\d/.test(m.text())) errors.push(m.text()); });
-  page.on('console', (m) => { if (/Content Security Policy|Refused to/.test(m.text())) errors.push('CSP: ' + m.text()); });
-  const shot = (n) => page.screenshot({ path: `${out}/${n}.png` });
+  const watch = (pg) => {
+    pg.on('pageerror', (e) => errors.push(String(e)));
+    pg.on('console', (m) => {
+      if (m.type() === 'error' && !/status of 4\d\d/.test(m.text())) errors.push(m.text());
+      if (/Content Security Policy|Refused to/.test(m.text())) errors.push('CSP: ' + m.text());
+    });
+  };
+  watch(page);
+  const shot = (n, pg = page) => pg.screenshot({ path: `${out}/${n}.png` });
   try {
     await page.goto(base + '/app/');
     await page.waitForSelector('#nick');
     const me = uniq('Mira');
+    const pw = 'лунный-кот-7';
     await shot('web_01_login');
+    await page.click('#mode-register');
     await page.fill('#nick', me);
+    await page.fill('#password', pw);
+    await page.fill('#password2', pw);
     await page.click('#login');
-    await page.waitForSelector('#persona-search');
     await page.waitForSelector('[data-name="Вера Солнцева"]');
-    ok('registered by nick, characters listed', true, me);
+    ok('registered with nick + password, characters listed', true, me);
     await shot('web_02_characters');
 
     // personal chat
@@ -46,79 +60,120 @@ async function apiAs(token, path, method = 'GET', body) {
     await page.fill('#chat-input', '*снимаю шляпу* Добрый вечер');
     await page.click('#send');
     await page.waitForSelector('.bubble.char >> text=Ответ №', { timeout: 20000 });
-    await page.waitForSelector('#edit-last-ai', { timeout: 20000 });
-    ok('streamed reply in the character voice', true);
+    await page.waitForFunction(() => !document.querySelector('#generation-status'), null, { timeout: 20000 });
+    const thoughts = await page.locator('[data-kind="character"]').last().locator('.thought').count();
+    const bubbles = await page.locator('[data-kind="character"]').last().locator('.bubble').count();
+    ok('reply: thoughts on black, speech as bubbles', thoughts >= 1 && bubbles >= 1, `${thoughts} thought(s), ${bubbles} bubble(s)`);
+    const box = await page.locator('[data-kind="character"]').last().locator('.bubble').first().boundingBox();
+    const vw = page.viewportSize().width;
+    ok('bubbles leave room at the opposite edge', box.x + box.width < vw - 40, `right gap ${Math.round(vw - box.x - box.width)}px`);
+    // the input sits at the bottom of the screen
+    const ib = await page.locator('#send').boundingBox();
+    ok('input row at the bottom of the screen', page.viewportSize().height - (ib.y + ib.height) < 60, `gap ${Math.round(page.viewportSize().height - ib.y - ib.height)}px`);
     await shot('web_03_chat');
+    // "*" puts a pair of stars with the cursor between them
+    await page.fill('#chat-input', '');
+    await page.click('#star');
+    const st = await page.evaluate(() => { const t = document.querySelector('#chat-input'); return [t.value, t.selectionStart]; });
+    ok('"*" inserts ** with the cursor inside', st[0] === '**' && st[1] === 1, JSON.stringify(st));
+    await page.fill('#chat-input', '');
     await page.click('#suggest');
     await page.waitForSelector('#suggestion-2');
     await page.click('#suggestion-1');
     ok('three suggestions, one fills the input', (await page.inputValue('#chat-input')) === 'Кто ты такой?');
-    await page.click('#edit-last-ai');
+    await page.click('#edit-last');
     await page.fill('#edit-input', '*Вера смеётся* — Поправленный ответ.');
     await page.click('#edit-save');
     await page.waitForSelector('text=Поправленный ответ');
-    await page.waitForSelector('.bubble.char .edited');
-    ok('AI reply edited, marked "изменено"', true);
-    await shot('web_04_edited');
+    ok('AI reply edited from the ✎ tool', true);
     const before = await page.locator('.bubble.char').last().innerText();
     await page.click('#regenerate');
     await page.waitForFunction((b) => { const x = document.querySelectorAll('.bubble.char'); return x.length && x[x.length - 1].innerText !== b && !document.querySelector('#generation-status'); }, before, { timeout: 20000 });
     ok('regenerate replaces the reply', true);
+    // scene picture from the dialogue, one tap
+    await page.click('#photo');
+    await page.waitForSelector('[data-kind="photo"]:not(.own)', { timeout: 20000 });
+    ok('scene picture from the dialogue', true);
+    // own photo into the chat
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#upload')]);
+    await chooser.setFiles(pngPath);
+    await page.waitForSelector('.photo.own img.loaded', { timeout: 20000 });
+    ok('own photo sent to the chat', true);
+    await shot('web_04_chat_tools');
 
-    // chats list
+    // profile: copy the code, change the password, manage characters / stories / chats
     await page.click('#back');
-    await page.waitForSelector('[data-room]');
-    ok('chat listed under Чаты', true);
-    await shot('web_05_chats');
-
-    // friends
-    const other = await apiAs(null, '/v1/register', 'POST', { nick: uniq('Kirill') });
-    await apiAs(other.token, '/v1/me', 'PATCH', { about: 'Играю за мага' });
-    await page.click('#tab-friends');
-    await page.fill('#friend-search', other.user.nick.slice(2).toLowerCase());
-    await page.waitForSelector(`[data-user="${other.user.nick}"]`);
-    await page.click(`#add-${other.user.nick}`);
-    await page.waitForSelector(`#sent-${other.user.nick}`);
-    ok('people search by part of a nick, request sent', true);
-    await shot('web_06_friends');
-
-    // profile + transfer code
     await page.click('#tab-profile');
     await page.waitForSelector('#profile-nick');
     await page.click('#transfer-code-button');
     const code = (await page.textContent('#transfer-code')).trim();
-    ok('transfer code shown', /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code), code);
-    await shot('web_07_profile');
+    await page.click('#transfer-code');
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    ok('tap on the transfer code copies it', clip === code, code);
+    await page.waitForSelector('#my-personas');
+    await page.waitForSelector('#my-rooms .list-item');
+    await page.waitForSelector('#my-stories .list-item');
+    ok('profile lists my characters, stories and chats', true);
+    await page.click('#my-rooms .list-item [aria-label]');
+    await page.click('#confirm-ok');
+    await page.waitForFunction(() => !document.querySelector('#my-rooms .list-item'));
+    ok('a chat deleted from the profile', true);
+    await page.fill('#old-password', pw);
+    await page.fill('#change-password', pw + '!');
+    await page.click('#change-password-save');
+    await page.waitForSelector('text=Пароль изменён');
+    ok('password changed in the profile', true);
+    await shot('web_05_profile');
 
-    // create a character with AI fill and a styled AI avatar
-    await page.click('#tab-characters');
-    await page.click('#create-persona');
-    await page.fill('#fill-idea', 'хозяйка маяка с секретом');
-    await page.click('#fill');
-    await page.waitForFunction(() => document.querySelector('#p-name').value === 'Ветта');
-    await page.click('#avatar-tile');
-    await page.click('#style-manhwa');
-    await shot('web_08_avatar_styles');
-    await page.click('#avatar-generate');
-    await page.click('#avatar-use');
-    await page.click('#vis-public');
-    await page.click('#publish');
-    await page.waitForSelector('#persona-chat-new');
-    ok('character created with AI fill + avatar and published', (await page.textContent('.topbar .title')) === 'Ветта');
-    await shot('web_09_persona');
-
-    // the same account in another "browser" via the transfer code
+    // another device: nick + password
     const ctx2 = await browser.newContext({ ...phone });
     const p2 = await ctx2.newPage();
+    watch(p2);
     await p2.goto(base + '/app/');
-    await p2.click('#transfer-toggle');
     await p2.fill('#nick', me.toUpperCase());
-    await p2.fill('#code', code);
+    await p2.fill('#password', pw + '!');
     await p2.click('#login');
     await p2.waitForSelector('#persona-search');
-    await p2.click('#tab-chats');
-    await p2.waitForSelector('[data-room]');
-    ok('second device signs in with the code and sees the chat', true);
+    ok('second device signs in with nick + password', true);
+
+    // an account from before passwords must set one first
+    const legacy = await apiAs(null, '/v1/register', 'POST', { nick: uniq('Old') });
+    const ctx3 = await browser.newContext({ ...phone });
+    await ctx3.addInitScript(([t, u]) => { localStorage.setItem('gs_token', t); localStorage.setItem('gs_me', u); },
+      [legacy.token, JSON.stringify({ id: legacy.user.id, nick: legacy.user.nick })]);
+    const p3 = await ctx3.newPage();
+    watch(p3);
+    await p3.goto(base + '/app/');
+    await p3.waitForSelector('#new-password');
+    await shot('web_06_set_password', p3);
+    await p3.fill('#new-password', 'старыйаккаунт');
+    await p3.fill('#new-password2', 'старыйаккаунт');
+    await p3.click('#set-password');
+    await p3.waitForSelector('#persona-search');
+    ok('old account is asked for a password first', true);
+
+    // admin page
+    if (adminPassword) {
+      const p4 = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+      watch(p4);
+      await p4.goto(base + '/admin/');
+      await p4.fill('#admin-password', 'неверный');
+      await p4.click('#admin-login');
+      await p4.waitForSelector('text=Неверный пароль');
+      await p4.fill('#admin-password', adminPassword);
+      await p4.click('#admin-login');
+      await p4.waitForSelector(`#users-table tr[data-nick="${me}"]`);
+      const cells = await p4.locator(`#users-table tr[data-nick="${me}"] td`).allInnerTexts();
+      ok('admin sees the user with text tokens', parseInt((cells[3] || '0').replace(/\D/g, ''), 10) > 0, cells.slice(0, 5).join(' | '));
+      await p4.screenshot({ path: `${out}/web_07_admin_users.png` });
+      await p4.click('#tab-photos');
+      await p4.waitForSelector('[data-photo]');
+      p4.once('dialog', (d) => d.accept());
+      await p4.locator('[data-photo] button').first().click();
+      await p4.waitForFunction(() => !document.querySelector('[data-photo]'));
+      ok('admin deletes a player photo before the week is over', true);
+      const msgs = await page.goto(base + '/app/#/chats');
+    }
   } catch (e) {
     ok('scenario', false, String(e).slice(0, 300));
     await shot('web_error').catch(() => {});

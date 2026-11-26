@@ -8,6 +8,7 @@ import pytest_asyncio
 os.environ.setdefault("LLM_BACKEND", "fake")
 os.environ.setdefault("REPLY_DEBOUNCE_MS", "50")
 os.environ.setdefault("DEFAULT_AI_MODE", "local")
+os.environ.setdefault("CLOUD_RECENT_MESSAGES", "10")  # keeps summary tests short
 
 
 @pytest_asyncio.fixture
@@ -28,7 +29,8 @@ async def client():
     import app.llm as llm
     import app.images as images
     import app.personas as personas
-    for m in (main, rooms, stories, worker, llm, images, personas):
+    import app.admin as admin
+    for m in (main, rooms, stories, worker, llm, images, personas, admin):
         m.settings = config.settings
     from app.ratelimit import limiter
 

@@ -54,7 +54,7 @@ class Settings:
     cloud_text_model: str = field(default_factory=lambda: _env("CLOUD_TEXT_MODEL", "deepseek/deepseek-v4.1-flash"))
     cloud_image_model: str = field(default_factory=lambda: _env("CLOUD_IMAGE_MODEL", "google/gemini-3.1-flash-lite-image"))
     cloud_ctx_tokens: int = field(default_factory=lambda: _int("CLOUD_CTX_TOKENS", 16000))
-    cloud_max_tokens: int = field(default_factory=lambda: _int("CLOUD_MAX_TOKENS", 700))
+    cloud_max_tokens: int = field(default_factory=lambda: _int("CLOUD_MAX_TOKENS", 450))
     cloud_temperature: float = field(default_factory=lambda: _float("CLOUD_TEMPERATURE", 0.8))
     cloud_recent_messages: int = field(default_factory=lambda: _int("CLOUD_RECENT_MESSAGES", 40))
     cloud_timeout_s: int = field(default_factory=lambda: _int("CLOUD_TIMEOUT_S", 120))
@@ -75,6 +75,12 @@ class Settings:
     transfer_code_attempts: int = 5
     online_window_s: int = field(default_factory=lambda: _int("ONLINE_WINDOW_S", 180))
     about_max_chars: int = 300
+    # the small local model (Ollama) is off by default: every room uses the cloud model
+    local_ai: bool = field(default_factory=lambda: _env("LOCAL_AI", "off").lower() in ("1", "on", "true", "yes"))
+    chat_photo_ttl_days: int = field(default_factory=lambda: _int("CHAT_PHOTO_TTL_DAYS", 7))
+    rl_chat_photos_per_hour: int = field(default_factory=lambda: _int("RL_CHAT_PHOTOS_PER_HOUR", 20))
+    # scrypt hash of the admin password (deploy/set-admin-password.sh); empty = no admin page
+    admin_password_hash: str = field(default_factory=lambda: _env("ADMIN_PASSWORD_HASH", ""))
     rl_avatars_per_day: int = field(default_factory=lambda: _int("RL_AVATARS_PER_DAY", 20))
     rl_persona_fill_per_hour: int = field(default_factory=lambda: _int("RL_PERSONA_FILL_PER_HOUR", 30))
     max_personas_per_user: int = field(default_factory=lambda: _int("MAX_PERSONAS_PER_USER", 100))
@@ -88,6 +94,8 @@ class Settings:
         return bool(self.openrouter_api_key) or self.llm_backend == "fake"
 
     def new_room_ai_mode(self) -> str:
+        if not self.local_ai:
+            return "cloud"
         if self.default_ai_mode in ("local", "cloud"):
             return "cloud" if (self.default_ai_mode == "cloud" and self.cloud_available) else "local"
         return "cloud" if self.cloud_available else "local"

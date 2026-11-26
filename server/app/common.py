@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -22,6 +24,31 @@ def new_token() -> str:
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# passwords: scrypt with a random salt (memory-hard; ~16 MB, ~50 ms per check)
+# ---------------------------------------------------------------------------
+def hash_password(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    h = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    # ":" separators: the hash also goes into deploy/.env (admin password), where "$" would be interpolated
+    return "scrypt:16384:8:1:" + base64.b64encode(salt).decode() + ":" + base64.b64encode(h).decode()
+
+
+def verify_password(password: str, stored: str | None) -> bool:
+    if not stored:
+        return False
+    try:
+        algo, n, r, p, salt, h = stored.replace("$", ":").split(":")
+        if algo != "scrypt":
+            return False
+        want = base64.b64decode(h)
+        got = hashlib.scrypt(password.encode("utf-8"), salt=base64.b64decode(salt), n=int(n), r=int(r), p=int(p),
+                             dklen=len(want))
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(got, want)
 
 
 class ApiError(HTTPException):

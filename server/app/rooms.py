@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from . import llm, prompt as P
+from . import llm, prompt as P, usage
 from .common import ApiError, User, hub, new_id, not_found
 from .config import settings
 from .db import Database, now_ms
@@ -132,7 +132,8 @@ def room_detail(db: Database, user: User, room) -> dict:
         "my_seat": 0 if room["owner_id"] == user.id else 1,
         "seats": seats_of(db, room),
         "scene_location": room["scene_location"],
-        "ai_mode": room["ai_mode"],
+        "ai_mode": room["ai_mode"] if settings.local_ai else "cloud",
+        "local_available": settings.local_ai,
         "cloud_available": settings.cloud_available,
         "images_available": settings.cloud_available,
         "ai_models": {"local": settings.llm_model, "cloud": settings.cloud_text_model, "image": settings.cloud_image_model},
@@ -552,6 +553,8 @@ def set_settings(db: Database, user: User, room_pid: str, body: RoomSettingsIn) 
     room = member_room(db, user, room_pid)
     if room["owner_id"] != user.id:
         raise ApiError(403, "not_owner", "Переключать ИИ может только хозяин сцены.")
+    if body.ai_mode == "local" and not settings.local_ai:
+        raise ApiError(400, "local_disabled", "Локальный ИИ отключён: все сцены ведёт облачная модель.")
     if body.ai_mode == "cloud" and not settings.cloud_available:
         raise ApiError(400, "cloud_unavailable", "Облачный ИИ не настроен на сервере (нет ключа OpenRouter).")
     if body.ai_mode != room["ai_mode"]:
@@ -666,12 +669,64 @@ async def suggest_replies(db: Database, user: User, room_pid: str) -> dict:
     rows = db.all("SELECT * FROM messages WHERE room_id=? AND hidden=0 AND kind<>'system' AND image_id IS NULL "
                   "ORDER BY seq DESC LIMIT 12", (room["id"],))
     history = [P.HistoryItem(r["seq"], r["kind"], r["speaker_name"] or P.NARRATOR, r["text"]) for r in reversed(rows)]
-    provider = "cloud" if room["ai_mode"] == "cloud" and settings.cloud_available else "local"
+    provider = "local" if (settings.local_ai and room["ai_mode"] == "local") else "cloud"
     try:
-        res = await llm.chat(P.suggest_messages(hero, others, history), num_predict=260, temperature=0.95, provider=provider)
+        res = await llm.chat(P.suggest_messages(hero, others, history), num_predict=260, temperature=0.8, provider=provider)
     except llm.LLMError as e:
         raise ApiError(502, "ai_failed", f"ИИ не ответил: {e}")
+    usage.record(db, user.id, "text", settings.cloud_text_model if provider == "cloud" else settings.llm_model, res)
     options = P.parse_suggestions(res.text)
     if not options:
         raise ApiError(502, "ai_bad_output", "ИИ не смог предложить варианты. Попробуй ещё раз.")
     return {"suggestions": options}
+
+
+# ---------------------------------------------------------------------------
+# a player's own photos in the chat — kept for a week (the admin can remove them earlier)
+# ---------------------------------------------------------------------------
+def post_photo(db: Database, user: User, room, data: bytes, w: int, h: int, caption: str, client_id: str | None) -> dict:
+    from .images import save_image
+    if client_id:
+        dup = db.one("SELECT * FROM messages WHERE room_id=? AND user_id=? AND client_id=?", (room["id"], user.id, client_id))
+        if dup:
+            return {"message": message_dict(db, dup, user), "duplicate": True}
+    seats = seats_of(db, room)
+    hero_name = next((s["hero_name"] for s in seats if s["user"] and s["user"]["id"] == user.public_id), user.nick)
+    ts = now_ms()
+    with db.tx():
+        iid = save_image(db, user.id, data, w, h)
+        db.run("UPDATE images SET purpose='chat', expires_at=? WHERE id=?",
+               (ts + settings.chat_photo_ttl_days * 86_400_000, iid))
+        mid = _append(db, room["id"], "player", user.id, None, hero_name, caption.strip()[:500],
+                      client_id=client_id or None, image_id=iid)
+    _notify_room(room["id"])
+    return {"message": message_dict(db, db.one("SELECT * FROM messages WHERE id=?", (mid,)), user), "duplicate": False}
+
+
+def delete_chat_photo(db: Database, image_id: str, note: str) -> bool:
+    """Remove a player's photo everywhere; its chat line becomes a short system note."""
+    import os
+    img = db.one("SELECT * FROM images WHERE id=? AND purpose='chat'", (image_id,))
+    if not img:
+        return False
+    rooms = set()
+    with db.tx():
+        for m in db.all("SELECT id, room_id FROM messages WHERE image_id=?", (image_id,)):
+            rev = _bump(db, m["room_id"])
+            db.run("UPDATE messages SET image_id=NULL, kind='system', text=?, rev=? WHERE id=?", (note, rev, m["id"]))
+            rooms.add(m["room_id"])
+        db.run("DELETE FROM images WHERE id=?", (image_id,))
+    try:
+        os.remove(os.path.join(settings.images_dir, image_id + ".jpg"))
+    except OSError:
+        pass
+    for rid in rooms:
+        _notify_room(rid)
+    return True
+
+
+def expire_chat_photos(db: Database) -> int:
+    rows = db.all("SELECT id FROM images WHERE purpose='chat' AND expires_at IS NOT NULL AND expires_at<?", (now_ms(),))
+    for r in rows:
+        delete_chat_photo(db, r["id"], f"Фото удалено: свои фото хранятся {settings.chat_photo_ttl_days} дней.")
+    return len(rows)

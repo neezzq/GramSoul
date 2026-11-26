@@ -79,7 +79,7 @@ async def test_taken_nick_gives_no_access(client):
     assert r.status_code == 409 and "token" not in r.text
     for path in ("/v1/login", "/v1/auth", "/v1/session"):
         r = await client.post(path, json={"nick": "Mira"})
-        assert r.status_code in (404, 405)
+        assert r.status_code in (400, 404, 405) and "token" not in r.text  # /v1/login needs a password
     r = await client.get("/v1/me", headers={"Authorization": "Bearer guessed"})
     assert r.status_code == 401
     r = await client.get("/v1/me")
@@ -446,42 +446,32 @@ async def test_quick_story(client):
     assert s["generation"]["status"] == "done"
 
 
-async def test_hero_only_output_retries_with_narrator_prefill(client):
+async def test_reply_only_for_a_hero_is_never_shown(client):
     ha, hb, a, b, room = await shared_room(client)
     rid = room["id"]
     await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Проверка #onlyhero"}, headers=ha)
     s = await wait_generation(client, ha, rid)
-    # the first (fake) answer only speaks for a hero and is dropped; the prefilled retry starts as the narrator
-    assert s["generation"]["status"] == "done"
-    ai = [m for m in s["messages"] if m["generation_id"]]
-    assert ai and all("встаёт" not in m["text"] for m in ai)
-
+    # the (fake) model only speaks for a player's hero: nothing of it reaches the chat, the turn can be retried
+    assert s["generation"]["status"] == "failed"
+    assert all("встаёт" not in m["text"] for m in s["messages"])
 
 
 # ---------------------------------------------------------------- cloud AI + photos
-async def test_switch_ai_mode_and_cloud_prompt(client):
+async def test_every_room_uses_the_cloud_model(client):
     ha, hb, a, b, room = await shared_room(client)
     rid = room["id"]
     d = (await client.get(f"/v1/rooms/{rid}", headers=ha)).json()["room"]
-    assert d["ai_mode"] == "local" and d["cloud_available"] is True
-    # only the owner can switch
-    r = await client.patch(f"/v1/rooms/{rid}/settings", json={"ai_mode": "cloud"}, headers=hb)
-    assert r.status_code == 403
-    r = await client.patch(f"/v1/rooms/{rid}/settings", json={"ai_mode": "cloud"}, headers=ha)
-    assert r.status_code == 200
-    sb = (await client.get(f"/v1/rooms/{rid}/sync", params={"since": 0}, headers=hb)).json()
-    assert sb["room"]["ai_mode"] == "cloud"
-    assert any("облачный" in m["text"] for m in sb["messages"] if m["kind"] == "system")
+    assert d["ai_mode"] == "cloud" and d["local_available"] is False
+    # the small local model is gone: switching to it is refused
+    r = await client.patch(f"/v1/rooms/{rid}/settings", json={"ai_mode": "local"}, headers=ha)
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "local_disabled"
     await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Привет #echo_system"}, headers=ha)
     s = await wait_generation(client, ha, rid)
     assert any("ОБЛАКО" in m["text"] for m in s["messages"])
     lp = (await client.get(f"/v1/rooms/{rid}/last-prompt", headers=ha)).json()
-    assert "подробно" in lp["prompt"]
-    # back to local
-    await client.patch(f"/v1/rooms/{rid}/settings", json={"ai_mode": "local"}, headers=ha)
-    await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Ещё #echo_system"}, headers=hb)
-    s = await wait_generation(client, ha, rid)
-    assert any("ЛОКАЛЬНО" in m["text"] for m in s["messages"])
+    assert "подробно" in lp["prompt"] or "живо" in lp["prompt"]
+    h = (await client.get("/v1/health")).json()
+    assert h["local_ai"] is False and h["model"] is None
 
 
 async def wait_photo(client, h, rid, timeout=10.0):

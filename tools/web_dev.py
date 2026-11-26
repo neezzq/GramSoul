@@ -21,7 +21,9 @@ from app.main import app as api  # noqa: E402
 site = os.path.join(HERE, "..", "deploy", "site")
 web = Starlette(routes=[
     Route("/app", lambda r: RedirectResponse("/app/")),
+    Route("/admin", lambda r: RedirectResponse("/admin/")),
     Mount("/app", StaticFiles(directory=os.path.join(site, "app"), html=True)),
+    Mount("/admin", StaticFiles(directory=os.path.join(site, "admin"), html=True)),
     Mount("/v1", app=api),  # the API keeps its /v1 prefix below
 ])
 
@@ -38,7 +40,7 @@ async def asgi(scope, receive, send):
         return await api(scope, receive, send)
 
     async def send_with_csp(msg):
-        if msg["type"] == "http.response.start" and scope["path"].startswith("/app"):
+        if msg["type"] == "http.response.start" and scope["path"].startswith(("/app", "/admin")):
             msg["headers"] = list(msg.get("headers", [])) + [(b"content-security-policy", CSP.encode()),
                                                               (b"cache-control", b"no-cache")]
         await send(msg)

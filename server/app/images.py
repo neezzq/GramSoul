@@ -40,6 +40,17 @@ def process_image(raw: bytes, max_side: int = 1280, crop: tuple[int, int] | None
     return out.getvalue(), img.width, img.height
 
 
+def read_image(iid: str) -> bytes | None:
+    """Bytes of a stored image (JPEG), or None."""
+    if not iid or "/" in iid or ".." in iid:
+        return None
+    try:
+        with open(os.path.join(settings.images_dir, iid + ".jpg"), "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def save_image(db: Database, owner_id: int | None, data: bytes, w: int, h: int) -> str:
     iid = new_id(16)
     os.makedirs(settings.images_dir, exist_ok=True)

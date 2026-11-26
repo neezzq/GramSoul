@@ -10,13 +10,14 @@ import secrets
 import sqlite3
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from . import llm, nick as nickmod, personas as PS, rooms as R, stories as S
-from .common import ApiError, User, auth_user, client_ip, hash_token, hub, new_id, new_token, not_found
+from . import admin as A, llm, nick as nickmod, personas as PS, rooms as R, stories as S
+from .common import (ApiError, User, auth_user, client_ip, hash_password, hash_token, hub, new_id, new_token, not_found,
+                     verify_password)
 from .config import settings
 from .db import Database, now_ms
 from .images import process_image, save_image
@@ -42,9 +43,12 @@ async def lifespan(app: FastAPI):
     PS.seed_demo(state.db)
     state.worker = Worker(state.db)
     state.worker.start()
-    warm = asyncio.create_task(llm.warmup())
+    if not settings.local_ai:  # no local model any more: every room uses the cloud model
+        state.db.run("UPDATE rooms SET ai_mode='cloud' WHERE ai_mode<>'cloud'")
+    warm = asyncio.create_task(llm.warmup()) if settings.local_ai else None
     yield
-    warm.cancel()
+    if warm:
+        warm.cancel()
     await state.worker.stop()
     state.db.close()
 
@@ -84,7 +88,9 @@ def rate(key: str, limit: int, window: float, msg: str = "Слишком час�
 # ---------------------------------------------------------------------------
 @app.get("/v1/health")
 async def health():
-    return {"ok": True, "model": settings.llm_model, "model_ready": await llm.model_available(),
+    return {"ok": True, "local_ai": settings.local_ai,
+            "model": settings.llm_model if settings.local_ai else None,
+            "model_ready": (await llm.model_available()) if settings.local_ai else None,
             "cloud": bool(settings.openrouter_api_key), "cloud_model": settings.cloud_text_model,
             "image_model": settings.cloud_image_model,
             "queue": state.worker.queue_length(), "busy": state.worker.busy}
@@ -95,6 +101,20 @@ async def health():
 # ---------------------------------------------------------------------------
 class RegisterIn(BaseModel):
     nick: str = Field(max_length=64)
+    password: str | None = Field(default=None, max_length=200)  # older app versions register without one
+
+
+PASSWORD_MIN = 6
+
+
+def _check_password(pw: str) -> str:
+    if len(pw) < PASSWORD_MIN:
+        raise ApiError(400, "password_short", f"Пароль — не короче {PASSWORD_MIN} символов.")
+    if len(pw) > 128:
+        raise ApiError(400, "password_long", "Пароль слишком длинный (максимум 128 символов).")
+    if pw.strip() == "":
+        raise ApiError(400, "password_blank", "Пароль не может состоять из пробелов.")
+    return pw
 
 
 @app.post("/v1/register", status_code=201)
@@ -104,6 +124,9 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
         nick = nickmod.validate(body.nick)
     except nickmod.NickError as e:
         raise ApiError(400, e.code, e.message)
+    pw_hash = None
+    if body.password is not None:
+        pw_hash = await asyncio.to_thread(hash_password, _check_password(body.password))
     rate(f"reg:{ip}", settings.rl_register_per_hour, 3600, "Слишком много регистраций с этого адреса. Попробуй позже.")
     key = nickmod.key(nick)
     if d.one("SELECT 1 FROM users WHERE nick_key=?", (key,)):
@@ -112,7 +135,8 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
     ts = now_ms()
     try:
         with d.tx():
-            cur = d.run("INSERT INTO users(public_id, nick, nick_key, created_at) VALUES(?,?,?,?)", (new_id(), nick, key, ts))
+            cur = d.run("INSERT INTO users(public_id, nick, nick_key, password_hash, created_at) VALUES(?,?,?,?,?)",
+                        (new_id(), nick, key, pw_hash, ts))
             d.run("INSERT INTO sessions(token_hash, user_id, created_at, last_seen_at) VALUES(?,?,?,?)",
                   (hash_token(token), cur.lastrowid, ts, ts))
     except sqlite3.IntegrityError:
@@ -124,7 +148,7 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
     except Exception:  # the account must exist even if seeding fails
         log.exception("demo seeding failed")
         demo = None
-    return {"token": token, "user": _user_dict(u), "demo_story_id": demo["id"] if demo else None}
+    return {"token": token, "user": _me_dict(u), "demo_story_id": demo["id"] if demo else None}
 
 
 def _user_dict(row) -> dict:
@@ -151,9 +175,67 @@ def _with_presence(item: dict, last_seen: int | None) -> dict:
     return item
 
 
+def _me_dict(row) -> dict:
+    """Own profile: the public part plus whether a password is set (the app asks for one if not)."""
+    full = row if "password_hash" in row.keys() else None
+    out = _user_dict(row)
+    out["has_password"] = bool(full["password_hash"]) if full is not None else False
+    return out
+
+
+def _me_row(d: Database, uid: int):
+    return d.one("SELECT id, public_id, nick, avatar_image_id, about, password_hash FROM users WHERE id=?", (uid,))
+
+
 @app.get("/v1/me")
 async def me(user: User = Depends(current_user), d: Database = Depends(db)):
-    return {"user": _user_dict(_user_by_id(d, user.id))}
+    return {"user": _me_dict(_me_row(d, user.id))}
+
+
+class LoginIn(BaseModel):
+    nick: str = Field(max_length=64)
+    password: str = Field(max_length=200)
+
+
+@app.post("/v1/login", status_code=201)
+async def login(body: LoginIn, request: Request, d: Database = Depends(db)):
+    """Nick + password. One generic error for an unknown nick, a wrong password or an account
+    that has no password yet — nothing tells which nicks exist."""
+    rate(f"login:{client_ip(request)}", 10, 600, "Слишком много попыток входа. Подожди 10 минут.")
+    bad = ApiError(400, "bad_credentials", "Неверный ник или пароль.")
+    q = nickmod.clean(body.nick)
+    u = d.one("SELECT id, password_hash FROM users WHERE nick_key=?", (nickmod.key(q),)) if q else None
+    if u is not None:
+        rate(f"login-user:{u['id']}", 10, 3600, "Слишком много попыток для этого ника. Попробуй через час.")
+    stored = u["password_hash"] if u else None
+    ok = await asyncio.to_thread(verify_password, body.password, stored or _DUMMY_HASH)
+    if not u or not stored or not ok:
+        raise bad
+    token = new_token()
+    ts = now_ms()
+    d.run("INSERT INTO sessions(token_hash, user_id, created_at, last_seen_at) VALUES(?,?,?,?)", (hash_token(token), u["id"], ts, ts))
+    return {"token": token, "user": _me_dict(_me_row(d, u["id"]))}
+
+
+_DUMMY_HASH = hash_password("timing-equaliser")  # unknown nicks cost the same time as real ones
+
+
+class PasswordIn(BaseModel):
+    password: str = Field(max_length=200)
+    old_password: str | None = Field(default=None, max_length=200)
+
+
+@app.post("/v1/me/password")
+async def set_password(body: PasswordIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    """First password for an existing account, or a change (then the old one is needed)."""
+    rate(f"pw:{user.id}", 10, 3600, "Слишком много попыток. Попробуй позже.")
+    row = _me_row(d, user.id)
+    if row["password_hash"]:
+        if not body.old_password or not await asyncio.to_thread(verify_password, body.old_password, row["password_hash"]):
+            raise ApiError(400, "bad_old_password", "Старый пароль неверный.")
+    new_hash = await asyncio.to_thread(hash_password, _check_password(body.password))
+    d.run("UPDATE users SET password_hash=? WHERE id=?", (new_hash, user.id))
+    return {"user": _me_dict(_me_row(d, user.id))}
 
 
 class ProfileIn(BaseModel):
@@ -180,7 +262,7 @@ async def update_me(body: ProfileIn, user: User = Depends(current_user), d: Data
         params.append(iid)
     if sets:
         d.run(f"UPDATE users SET {', '.join(sets)} WHERE id=?", (*params, user.id))
-    return {"user": _user_dict(_user_by_id(d, user.id))}
+    return {"user": _me_dict(_me_row(d, user.id))}
 
 
 @app.get("/v1/users/{uid}/avatar")
@@ -242,7 +324,7 @@ async def login_with_transfer_code(body: TransferLoginIn, request: Request, d: D
         d.run("UPDATE transfer_codes SET used_at=? WHERE id=?", (ts, c["id"]))
         d.run("INSERT INTO sessions(token_hash, user_id, created_at, last_seen_at) VALUES(?,?,?,?)",
               (hash_token(token), u["id"], ts, ts))
-    return {"token": token, "user": _user_dict(_user_by_id(d, u["id"]))}
+    return {"token": token, "user": _me_dict(_me_row(d, u["id"]))}
 
 
 @app.post("/v1/logout")
@@ -503,9 +585,9 @@ async def create_persona(body: PS.PersonaIn, user: User = Depends(current_user),
 
 
 @app.post("/v1/personas/fill")
-async def fill_persona(body: PS.FillIn, user: User = Depends(current_user)):
+async def fill_persona(body: PS.FillIn, user: User = Depends(current_user), d: Database = Depends(db)):
     rate(f"pfill:{user.id}", settings.rl_persona_fill_per_hour, 3600, "Слишком много запросов к ИИ. Попробуй позже.")
-    return await PS.fill(user, body)
+    return await PS.fill(user, body, d)
 
 
 @app.get("/v1/personas/{pid}")
@@ -681,6 +763,22 @@ async def suggest(room_id: str, user: User = Depends(current_user), d: Database 
     return await R.suggest_replies(d, user, room_id)
 
 
+@app.post("/v1/rooms/{room_id}/upload", status_code=201)
+async def upload_chat_photo(room_id: str, file: UploadFile = File(...), caption: str = Form(""), client_id: str = Form(""),
+                            user: User = Depends(current_user), d: Database = Depends(db)):
+    """A player's own photo in the chat. Kept for a week, then removed automatically."""
+    room = R.member_room(d, user, room_id)
+    rate(f"chatphoto:{user.id}", settings.rl_chat_photos_per_hour, 3600, "Слишком много фото за час. Попробуй позже.")
+    raw = await file.read(settings.max_image_bytes + 1)
+    if len(raw) > settings.max_image_bytes:
+        raise ApiError(413, "too_large", "Картинка слишком большая (максимум 6 МБ).")
+    try:
+        data, w, h = await asyncio.to_thread(process_image, raw, 1600)
+    except Exception:
+        raise ApiError(400, "bad_image", "Не удалось прочитать картинку. Выбери JPG или PNG.")
+    return R.post_photo(d, user, room, data, w, h, caption[:500], client_id[:64] or None)
+
+
 @app.post("/v1/rooms/{room_id}/messages", status_code=201)
 async def post_message(room_id: str, body: R.MessageIn, user: User = Depends(current_user), d: Database = Depends(db)):
     rate(f"msg:{user.id}", settings.rl_messages_per_min, 60)
@@ -724,3 +822,67 @@ async def photo(room_id: str, body: R.PhotoIn, user: User = Depends(current_user
 @app.get("/v1/rooms/{room_id}/last-prompt")
 async def last_prompt(room_id: str, user: User = Depends(current_user), d: Database = Depends(db)):
     return R.last_prompt(d, user, room_id)
+
+
+# ---------------------------------------------------------------------------
+# admin page: users with spent tokens, players' photos. Password = ADMIN_PASSWORD_HASH in .env
+# ---------------------------------------------------------------------------
+ADMIN_TTL_MS = 12 * 3600 * 1000
+
+
+async def current_admin(request: Request) -> None:
+    if not settings.admin_password_hash:
+        raise not_found("Не найдено")
+    token = request.headers.get("x-admin-token", "")
+    row = state.db.one("SELECT expires_at FROM admin_sessions WHERE token_hash=?", (hash_token(token),)) if token else None
+    if not row or row["expires_at"] < now_ms():
+        raise ApiError(401, "admin_auth", "Нужен вход в админку.")
+
+
+class AdminLoginIn(BaseModel):
+    password: str = Field(max_length=200)
+
+
+@app.post("/v1/admin/login")
+async def admin_login(body: AdminLoginIn, request: Request, d: Database = Depends(db)):
+    if not settings.admin_password_hash:
+        raise not_found("Не найдено")
+    rate(f"admin:{client_ip(request)}", 5, 900, "Слишком много попыток. Подожди 15 минут.")
+    if not await asyncio.to_thread(verify_password, body.password, settings.admin_password_hash):
+        raise ApiError(400, "bad_password", "Неверный пароль.")
+    token = new_token()
+    ts = now_ms()
+    with d.tx():
+        d.run("DELETE FROM admin_sessions WHERE expires_at<?", (ts,))
+        d.run("INSERT INTO admin_sessions(token_hash, created_at, expires_at) VALUES(?,?,?)", (hash_token(token), ts, ts + ADMIN_TTL_MS))
+    return {"token": token, "expires_at": ts + ADMIN_TTL_MS}
+
+
+@app.post("/v1/admin/logout")
+async def admin_logout(request: Request, _: None = Depends(current_admin), d: Database = Depends(db)):
+    d.run("DELETE FROM admin_sessions WHERE token_hash=?", (hash_token(request.headers.get("x-admin-token", "")),))
+    return {"ok": True}
+
+
+@app.get("/v1/admin/users")
+async def admin_users(_: None = Depends(current_admin), d: Database = Depends(db)):
+    return A.users(d)
+
+
+@app.get("/v1/admin/photos")
+async def admin_photos(_: None = Depends(current_admin), d: Database = Depends(db)):
+    return A.photos(d)
+
+
+@app.get("/v1/admin/photos/{iid}")
+async def admin_photo(iid: str, _: None = Depends(current_admin), d: Database = Depends(db)):
+    if not d.one("SELECT 1 FROM images WHERE id=? AND purpose='chat'", (iid,)):
+        raise not_found("Фото не найдено")
+    return _image_response(iid)
+
+
+@app.delete("/v1/admin/photos/{iid}")
+async def admin_delete_photo(iid: str, _: None = Depends(current_admin), d: Database = Depends(db)):
+    if not R.delete_chat_photo(d, iid, "Фото удалено администратором."):
+        raise not_found("Фото не найдено")
+    return {"ok": True}

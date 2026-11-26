@@ -12,8 +12,9 @@ from . import prompt as P
 from .common import hub, new_id
 from .config import settings
 from .db import Database, now_ms
-from .images import process_image, save_image
-from .rooms import _append, _bump, _notify_room, room_personas, seats_of
+from .images import process_image, read_image, save_image
+from . import usage
+from .rooms import _append, _bump, _notify_room, expire_chat_photos, room_personas, seats_of
 
 log = logging.getLogger("fonar.worker")
 
@@ -66,8 +67,12 @@ class Worker:
         return ("gen", gen) if gen is not None else None
 
     async def _loop(self) -> None:
+        last_cleanup = 0.0
         while True:
             try:
+                if time.monotonic() - last_cleanup > 3600:  # hourly: players' photos older than a week
+                    last_cleanup = time.monotonic()
+                    expire_chat_photos(self.db)
                 picked = self._next_job()
                 if picked is None:
                     self._wake.clear()
@@ -109,7 +114,7 @@ class Worker:
     # ------------------------------------------------------------------
     @staticmethod
     def _limits(room) -> dict:
-        if room["ai_mode"] == "cloud":
+        if room["ai_mode"] == "cloud" or not settings.local_ai:
             return {"provider": "cloud", "model": settings.cloud_text_model, "num_ctx": settings.cloud_ctx_tokens,
                     "num_predict": settings.cloud_max_tokens, "recent": settings.cloud_recent_messages, "rich": True}
         return {"provider": "local", "model": settings.llm_model, "num_ctx": settings.llm_num_ctx,
@@ -263,6 +268,7 @@ class Worker:
                 result = await llm.chat(messages, stop=built.stop, temperature=temperature, extra_options=extra,
                                         num_predict=lim["num_predict"], provider=provider,
                                         on_delta=lambda piece: self._on_delta(room["id"], piece))
+                usage.record(db, job["requested_by"] or room["owner_id"], "text", lim["model"], result)
                 if prefill:
                     result.text = prefill + " " + result.text.lstrip()
             except llm.LLMError as e:
@@ -322,27 +328,39 @@ class Worker:
         room = db.one("SELECT * FROM rooms WHERE id=?", (job["room_id"],))
         if room is None:
             return
+        # the characters' own portraits go along as references, so the picture keeps their looks
+        avatar_ids: list[str] = []
         if room["story_id"] is None:
             cinp, persona = self._load_chat_input(room, "reply", None)
             in_frame = [P.Card(id=persona["id"], public_id=persona["public_id"], role="npc", name=persona["name"],
                                appearance=persona["description"])] if persona else []
-            prompt = P.image_prompt(room["title"], room["setting"], room["scene_location"], in_frame,
-                                    cinp.history if cinp else [], job["user_prompt"])
+            if persona and persona["avatar_image_id"]:
+                avatar_ids.append(persona["avatar_image_id"])
+            title, world, history = room["title"], room["setting"], (cinp.history if cinp else [])
         else:
             story = db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],))
             inp, npcs, seats = self._load_prompt_input(room, "reply", None)
             present = set(P.present_names(inp))
             in_frame = [c for c in npcs if c.name in present] + [s.hero for s in seats if s.hero]
-            prompt = P.image_prompt(story["title"], story["world_rules"], room["scene_location"], in_frame,
-                                    inp.history, job["user_prompt"])
+            names = [c.name for c in in_frame]
+            if names:
+                marks = ",".join("?" * len(names))
+                avatar_ids += [r["avatar_image_id"] for r in db.all(
+                    f"SELECT avatar_image_id FROM characters WHERE story_id=? AND name IN ({marks}) AND avatar_image_id IS NOT NULL "
+                    "ORDER BY position LIMIT 3", (room["story_id"], *names))]
+            title, world, history = story["title"], story["world_rules"], inp.history
+        refs = [b for b in (read_image(i) for i in avatar_ids[:3]) if b]
+        prompt = P.image_prompt(title, world, room["scene_location"], in_frame, history, job["user_prompt"],
+                                with_references=bool(refs))
         with db.tx():
             db.run("UPDATE image_jobs SET status='running', model=?, prompt=? WHERE id=?",
                    (settings.cloud_image_model, prompt, job["id"]))
             _bump(db, room["id"])
         _notify_room(room["id"])
         try:
-            raw = await llm.generate_image(prompt)
-            data, w, h = await asyncio.to_thread(process_image, raw, 1280)
+            img = await llm.generate_image(prompt, references=refs)
+            usage.record(db, job["requested_by"], "photo", settings.cloud_image_model, img)
+            data, w, h = await asyncio.to_thread(process_image, img.data, 1280)
         except llm.LLMError as e:
             self._finish_image_failed(job, str(e))
             return
@@ -425,6 +443,7 @@ class Worker:
             lim = self._limits(room)
             # low temperature: a summary must not invent facts that later derail the story
             res = await llm.chat(msgs, num_predict=min(400, lim["num_predict"] + 40), provider=lim["provider"], temperature=0.3)
+            usage.record(self.db, room["owner_id"], "text", lim["model"], res)
             text = " ".join(res.text.replace("<|im_end|>", "").split())
             if len(text) < 20:
                 raise llm.LLMError("слишком короткое резюме")

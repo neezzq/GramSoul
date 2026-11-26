@@ -157,8 +157,9 @@ def _system_prompt(inp: PromptInput, present: list[str], level: int, rules_lim: 
     ex = npc_names[0] if npc_names else "Персонаж"
     if inp.rich:
         lines.append(
-            "Отвечай по-русски, живо и подробно: 2–6 строк. Каждая строка начинается с имени и двоеточия. "
-            f"«{NARRATOR}: …» — атмосферное описание событий, обстановки и ощущений (2–4 предложения); "
+            "Отвечай по-русски, живо, но коротко: обычно 1–3 строки, и строки не длинные. Каждая строка начинается "
+            "с имени и двоеточия. Длинный ответ — только когда в сцене происходит что-то важное; часто хватает одной реплики. "
+            f"«{NARRATOR}: …» — короткое описание событий и обстановки (1–2 предложения, не в каждом ответе); "
             "«Имя персонажа: …» — действия в *звёздочках*, реплика — с тире, строго в его манере речи. "
             "Реагируй на поступки героев конкретно, учитывай, где все находятся, кто рядом и что уже произошло. "
             "Двигай сюжет вперёд, не повторяй уже сказанное. Пример:\n"
@@ -500,7 +501,7 @@ def card_versions_json(npcs: list[Card], seats: list[Seat]) -> str:
 # Scene photo prompt (cloud image model)
 # ---------------------------------------------------------------------------
 def image_prompt(title: str, world_rules: str, location: str, characters: list[Card], recent: list[HistoryItem],
-                 user_prompt: str) -> str:
+                 user_prompt: str, with_references: bool = False) -> str:
     """What the player asked for comes first and wins; the scene only supplies looks and mood.
     Everyone in the picture is an adult (all characters are 18+)."""
     want = user_prompt.strip()
@@ -515,9 +516,12 @@ def image_prompt(title: str, world_rules: str, location: str, characters: list[C
         lines.append("Мир и эпоха: " + _clip(world_rules, 350) + ".")
     if location.strip() and not want:
         lines.append("Место: " + _clip(location, 250) + ".")
-    looks = [f"{c.name} — {_clip(c.appearance, 220)}" for c in characters if c.appearance.strip()]
+    looks = [f"{c.name} — {_clip(c.appearance, 300)}" for c in characters if c.appearance.strip()]
     if looks:
-        lines.append("Внешность персонажей: " + "; ".join(looks) + ".")
+        lines.append("Внешность персонажей — строго по описанию, ничего в ней не меняй: " + "; ".join(looks) + ".")
+    if with_references:
+        lines.append("Приложенные портреты показывают, как выглядят персонажи: сохрани их лица, причёски, цвет волос "
+                     "и глаз, одежду и стиль.")
     if recent:
         happening = " ".join(_cut(f"{h.speaker}: {h.text}", 220) for h in recent[-5:])
         lines.append(("Для настроения — что было в сцене: " if want else "Что происходит прямо сейчас: ")
@@ -550,8 +554,10 @@ class ChatPromptInput:
 
 CHAT_STYLE = (
     "Всегда отвечай по смыслу на последнее сообщение собеседника, помня всё, что было раньше. "
-    "Как отвечать: на языке собеседника; действия и обстановку пиши в *звёздочках* (курсив), реплики — с тире; "
-    "3–8 предложений; сохраняй характер и факты диалога; двигай сцену вперёд и не повторяй уже сказанное. "
+    "Как отвечать: на языке собеседника; действия, мысли и обстановку пиши в *звёздочках* (курсив), реплики — с тире. "
+    "Отвечай коротко и живо, как в переписке: обычно 1–4 предложения; длиннее — только если в сцене происходит что-то "
+    "важное; иногда достаточно одной короткой реплики. Не растягивай мысли на длинные абзацы. "
+    "Сохраняй характер и факты диалога; двигай сцену вперёд и не повторяй уже сказанное. "
     "Не подписывай ответ своим именем."
 )
 
@@ -640,17 +646,22 @@ def parse_chat_output(raw: str, name: str, user_names: list[str], history: list[
 # "Подсказать варианты реплики": three short options for the player's next turn
 # ---------------------------------------------------------------------------
 SUGGEST_SYSTEM = (
-    "Ты помогаешь игроку в ролевом чате. Предложи 3 разных коротких варианта его следующего хода — "
-    "каждый до 25 слов: действие в *звёздочках* и/или реплика. Варианты разные по настроению "
-    "(например: смелый, осторожный, неожиданный). Пиши на языке переписки, от лица игрока. "
+    "Ты помогаешь игроку в ролевом чате придумать его следующий ход. Предложи 3 варианта — каждый это прямой "
+    "ответ игрока на ПОСЛЕДНЮЮ реплику персонажа, по смыслу разговора и в той же сцене: короткое действие "
+    "в *звёздочках* и/или реплика с тире, до 20 слов. Варианты разные по настроению (например: тёплый, дерзкий, "
+    "осторожный), но все в тему. Пиши от лица игрока, на языке переписки, без пояснений. "
     "Ответ — только JSON-массив из трёх строк."
 )
 
 
 def suggest_messages(hero: str, others: list[str], history: list[HistoryItem]) -> list[dict]:
-    lines = "\n".join(_cut(_format_history_line(h), 300) for h in history[-12:])
+    lines = "\n".join(_cut(_format_history_line(h), 400) for h in history[-12:])
+    last_other = next((h for h in reversed(history) if h.kind != "player"), None)
     user = (f"Игрок пишет за: {hero}. Другие персонажи: {', '.join(others) or '—'}.\n\n"
-            f"Последние сообщения:\n{lines}\n\nТри варианта следующего хода игрока ({hero}):")
+            f"Разговор (последние сообщения):\n{lines}\n\n")
+    if last_other:
+        user += f"На это игрок сейчас отвечает — {last_other.speaker}: «{_clip(last_other.text, 600)}»\n\n"
+    user += f"Три варианта ответа игрока ({hero}) — JSON-массив:"
     return [{"role": "system", "content": SUGGEST_SYSTEM}, {"role": "user", "content": user}]
 
 

@@ -101,13 +101,16 @@ fi
 log "Запускаю контейнеры (первая сборка займёт несколько минут)"
 $DC up -d --build --remove-orphans
 
-log "Загружаю модель $MODEL"
-for i in $(seq 1 30); do
-  $DC exec -T ollama ollama list >/dev/null 2>&1 && break
-  sleep 2
-done
-$DC exec -T ollama ollama pull "$MODEL"
-$DC restart api >/dev/null
+if grep -qiE '^LOCAL_AI=(on|1|true|yes)' .env 2>/dev/null; then
+  log "Загружаю локальную модель $MODEL"
+  $DC --profile local up -d ollama
+  for i in $(seq 1 30); do
+    $DC exec -T ollama ollama list >/dev/null 2>&1 && break
+    sleep 2
+  done
+  $DC exec -T ollama ollama pull "$MODEL"
+  $DC restart api >/dev/null
+fi
 
 log "APK для скачивания"
 bash "$DIR/deploy/fetch-apk.sh" || echo "APK пока не опубликован — скачай его из чата и положи в $DIR/deploy/site/fonar.apk"
@@ -127,7 +130,7 @@ for i in $(seq 1 60); do
 done
 [ "$OK" = 1 ] || echo "HTTPS пока не отвечает: проверь, что порты 80 и 443 открыты у хостера, и запусти скрипт ещё раз."
 
-if [ "$SKIP_BENCH" != 1 ]; then
+if [ "$SKIP_BENCH" != 1 ] && grep -qiE '^LOCAL_AI=(on|1|true|yes)' .env 2>/dev/null; then
   log "Замер скорости модели и памяти"
   bash "$DIR/deploy/bench.sh" || true
 fi

@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.0';
+const WEB_VERSION = '1.1';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -61,6 +61,9 @@ const ICONS = {
   forward: 'M5 6l7 6-7 6M12 6l7 6-7 6',
   magic: 'M5 19L19 5M15 4l1 2 2 1-2 1-1 2-1-2-2-1 2-1zM6 6l.5 1 1 .5-1 .5L6 9l-.5-1-1-.5 1-.5z',
   refresh: 'M20 11a8 8 0 10-2.3 5.7M20 4v7h-7',
+  sparkle: 'M11 3l1.7 4.8L17.5 9.5l-4.8 1.7L11 16l-1.7-4.8L4.5 9.5l4.8-1.7zM18.5 14v5M16 16.5h5',
+  image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 8.5h.01',
+  trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
 };
 function icon(name, size = 24) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -338,64 +341,104 @@ function nickError(n) {
   return null;
 }
 
+function afterLogin(res) {
+  store.token = res.token;
+  store.me = res.user;
+  location.hash = res.user && res.user.has_password === false ? '#/set-password' : '#/characters';
+}
+
 function screenLogin(root) {
   if (store.token) { location.hash = '#/characters'; return; }
-  let transfer = false;
+  let mode = 'login'; // login | register | code
   const nick = h('input', { class: 'field', id: 'nick', placeholder: 'Ник', autocapitalize: 'off', autocomplete: 'username', spellcheck: 'false', maxlength: 24 });
+  const pw = h('input', { class: 'field', id: 'password', type: 'password', placeholder: 'Пароль', autocomplete: 'current-password', maxlength: 128 });
+  const pw2 = h('input', { class: 'field hidden', id: 'password2', type: 'password', placeholder: 'Пароль ещё раз', autocomplete: 'new-password', maxlength: 128 });
   const code = h('input', { class: 'field hidden', id: 'code', placeholder: 'Код переноса, например ABCD-EFGH', autocapitalize: 'characters', autocomplete: 'off', maxlength: 12 });
-  const hint = h('div', { class: 'hint' }, '3–20 символов: буквы, цифры, «_» и «.»');
+  const hint = h('div', { class: 'hint' });
   const err = h('div', { class: 'error', id: 'login-error' });
   const btn = h('button', { class: 'btn primary wide', id: 'login', type: 'submit', disabled: true }, 'Войти');
-  const toggle = h('button', { class: 'link', type: 'button', id: 'transfer-toggle' }, 'Вход с другого устройства по коду переноса');
+  const seg = h('div', { class: 'seg' });
+  const codeLink = h('button', { class: 'link', type: 'button', id: 'transfer-toggle' });
   const lost = sessionStorage.getItem('gs_lost');
   sessionStorage.removeItem('gs_lost');
   const update = () => {
     const e = nickError(nick.value);
-    hint.textContent = e || (transfer ? 'Ник и код из профиля на старом устройстве (код действует 10 минут)' : '3–20 символов: буквы, цифры, «_» и «.»');
+    pw.classList.toggle('hidden', mode === 'code');
+    pw2.classList.toggle('hidden', mode !== 'register');
+    code.classList.toggle('hidden', mode !== 'code');
+    pw.setAttribute('autocomplete', mode === 'register' ? 'new-password' : 'current-password');
+    btn.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
+    codeLink.textContent = mode === 'code' ? '← Вход по паролю' : 'Вход по коду переноса';
+    seg.classList.toggle('hidden', mode === 'code');
+    hint.textContent = e || (mode === 'register' ? 'Ник: 3–20 символов, буквы, цифры, «_» и «.». Пароль — не короче 6 символов.'
+      : mode === 'code' ? 'Ник и код из профиля на другом устройстве (код действует 10 минут).' : '');
     hint.style.color = e ? 'var(--error)' : '';
-    btn.disabled = !nick.value.trim() || !!e;
+    let ok = nick.value.trim() && !e;
+    if (mode === 'login') ok = ok && pw.value.length > 0;
+    if (mode === 'register') ok = ok && pw.value.length >= 6 && pw2.value.length > 0;
+    if (mode === 'code') ok = ok && code.value.replace(/[^A-Za-z0-9]/g, '').length >= 8;
+    btn.disabled = !ok;
   };
-  nick.addEventListener('input', () => { err.textContent = ''; update(); });
-  toggle.addEventListener('click', () => {
-    transfer = !transfer;
-    code.classList.toggle('hidden', !transfer);
-    toggle.textContent = transfer ? 'Я здесь впервые — создать ник' : 'Вход с другого устройства по коду переноса';
-    err.textContent = '';
-    update();
-  });
-  const form = h('form', null, nick, code, hint, err, btn, toggle);
+  const drawSeg = () => seg.replaceChildren(...[['login', 'Вход'], ['register', 'Регистрация']].map(([m, l]) =>
+    h('button', { type: 'button', id: 'mode-' + m, class: mode === m ? 'on' : '', onclick: () => { mode = m; err.textContent = ''; drawSeg(); update(); } }, l)));
+  drawSeg();
+  [nick, pw, pw2, code].forEach((x) => x.addEventListener('input', () => { err.textContent = ''; update(); }));
+  codeLink.addEventListener('click', () => { mode = mode === 'code' ? 'login' : 'code'; err.textContent = ''; drawSeg(); update(); });
+  const form = h('form', null, seg, nick, pw, pw2, code, hint, err, btn, codeLink);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (btn.disabled) return;
+    if (mode === 'register' && pw.value !== pw2.value) { err.textContent = 'Пароли не совпадают.'; return; }
     btn.disabled = true;
     err.textContent = '';
     try {
-      const res = transfer
-        ? await api('/v1/login/transfer', { method: 'POST', body: { nick: nick.value.trim(), code: code.value.trim() } })
-        : await api('/v1/register', { method: 'POST', body: { nick: nick.value.trim() } });
-      store.token = res.token;
-      store.me = res.user;
-      location.hash = '#/characters';
+      const n = nick.value.trim();
+      const res = mode === 'code' ? await api('/v1/login/transfer', { method: 'POST', body: { nick: n, code: code.value.trim() } })
+        : mode === 'register' ? await api('/v1/register', { method: 'POST', body: { nick: n, password: pw.value } })
+          : await api('/v1/login', { method: 'POST', body: { nick: n, password: pw.value } });
+      afterLogin(res);
     } catch (ex) {
-      err.textContent = ex.code === 'nick_taken'
-        ? 'Ник занят. Если это твой ник на другом устройстве — войди по коду переноса.' : ex.message;
-      if (ex.code === 'nick_taken') toggle.classList.add('accent');
+      err.textContent = ex.code === 'nick_taken' ? 'Ник занят. Если это твой ник — открой «Вход».' : ex.message;
     } finally {
       update();
     }
   });
   root.append(h('div', { class: 'login' },
-    h('div', { class: 'orb' }),
-    h('div', { class: 'brand' }, 'Gram', h('span', null, 'Soul')),
-    h('div', { class: 'muted center', style: 'margin-top:6px' }, 'Ролевые чаты с ИИ-персонажами', h('br'), 'вместе с друзьями'),
-    lost ? h('div', { class: 'card', style: 'margin-top:20px;font-size:14px' }, 'Сессия на этом устройстве закончилась. Войди по коду переноса или создай новый ник.') : null,
+    h('img', { class: 'logo', src: 'logo.png', alt: 'GramSoul' }),
+    h('div', { class: 'muted center', style: 'margin-top:2px' }, 'Ролевые чаты с ИИ-персонажами вместе с друзьями'),
+    lost ? h('div', { class: 'card', style: 'margin-top:20px;font-size:14px' }, 'Сессия на этом устройстве закончилась. Войди по нику и паролю.') : null,
     form,
-    h('div', { class: 'faint small center', style: 'margin-top:14px;line-height:1.5' },
-      'Без пароля и почты: новый ник сразу становится твоим аккаунтом, ключ входа хранится на этом устройстве. ' +
-      'Чтобы войти с другого устройства, создай в профиле код переноса.'),
     installHint(),
     h('div', { class: 'faint small', style: 'margin-top:16px' }, 'GramSoul Web ' + WEB_VERSION)));
   update();
+}
+
+// accounts made before passwords existed must choose one before going on
+function screenSetPassword(root) {
+  const pw = h('input', { class: 'field', id: 'new-password', type: 'password', placeholder: 'Новый пароль', autocomplete: 'new-password', maxlength: 128 });
+  const pw2 = h('input', { class: 'field', id: 'new-password2', type: 'password', placeholder: 'Ещё раз', autocomplete: 'new-password', maxlength: 128 });
+  const err = h('div', { class: 'error' });
+  const btn = h('button', { class: 'btn primary wide', id: 'set-password', type: 'submit', disabled: true }, 'Сохранить пароль');
+  const upd = () => { btn.disabled = pw.value.length < 6 || !pw2.value; };
+  [pw, pw2].forEach((x) => x.addEventListener('input', () => { err.textContent = ''; upd(); }));
+  const form = h('form', null, pw, pw2, h('div', { class: 'hint' }, 'Не короче 6 символов.'), err, btn);
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (pw.value !== pw2.value) { err.textContent = 'Пароли не совпадают.'; return; }
+    btn.disabled = true;
+    try {
+      const r = await api('/v1/me/password', { method: 'POST', body: { password: pw.value } });
+      store.me = r.user;
+      location.hash = '#/characters';
+    } catch (ex) { err.textContent = ex.message; upd(); }
+  });
+  root.append(h('div', { class: 'login' },
+    h('img', { class: 'logo small', src: 'logo.png', alt: 'GramSoul' }),
+    h('div', { style: 'font-size:24px;font-weight:700;margin-top:6px' }, 'Придумай пароль'),
+    h('div', { class: 'muted center', style: 'margin-top:8px;line-height:1.5' },
+      'Теперь в GramSoul вход по нику и паролю — так ты зайдёшь в свой аккаунт с любого устройства. ',
+      'Ник: ', h('b', null, (store.me && store.me.nick) || '')),
+    form));
 }
 
 // ------------------------------------------------------------------ characters
@@ -674,9 +717,49 @@ async function screenChats(root) {
 }
 
 // ------------------------------------------------------------------ chat
+// "*улыбается* — Привет. *думает о своём*" → [{act, text}] — actions/thoughts and spoken parts
+function segments(text) {
+  const out = [];
+  let i = 0;
+  text = text || '';
+  const push = (act, raw) => {
+    for (const piece of raw.split(/\n+/)) {
+      const t = piece.trim();
+      if (t && !/^[.,;:!?—–-]+$/.test(t)) out.push({ act, text: t });
+    }
+  };
+  while (i < text.length) {
+    const s = text.indexOf('*', i);
+    const e = s >= 0 ? text.indexOf('*', s + 1) : -1;
+    if (s < 0 || e < 0) { push(false, text.slice(i)); break; }
+    push(false, text.slice(i, s));
+    push(true, text.slice(s + 1, e));
+    i = e + 1;
+  }
+  return out;
+}
+
+// keep the chat exactly inside the visible area (iPhone keyboard, PWA status bar)
+function fitToViewport(el) {
+  const vv = window.visualViewport;
+  const fit = () => {
+    if (vv) {
+      el.style.height = vv.height + 'px';
+      el.style.transform = `translateY(${vv.offsetTop}px)`;
+    }
+  };
+  fit();
+  if (vv) { vv.addEventListener('resize', fit); vv.addEventListener('scroll', fit); }
+  document.documentElement.classList.add('chat-open');
+  return () => {
+    if (vv) { vv.removeEventListener('resize', fit); vv.removeEventListener('scroll', fit); }
+    document.documentElement.classList.remove('chat-open');
+  };
+}
+
 function screenChat(root, rid) {
   const me = store.me || {};
-  const st = { rev: 0, pv: -1, msgs: new Map(), room: null, gen: null, job: null, pending: [], editing: null, suggestions: [], busy: false, closed: false };
+  const st = { rev: 0, pv: -1, msgs: new Map(), room: null, gen: null, job: null, pending: [], suggestions: [], busy: false, uploading: 0 };
   const ctrl = new AbortController();
   let alive = true;
   const els = new Map(); // message id -> { el, sig }
@@ -684,96 +767,108 @@ function screenChat(root, rid) {
   const title = h('div', { class: 'title ellipsis' }, 'Чат');
   const sub = h('div', { class: 'sub ellipsis' });
   const aiBtn = h('button', { class: 'icon-btn hidden', id: 'ai-mode', 'aria-label': 'Режим ИИ' });
-  const menuBtn = h('button', { class: 'icon-btn', id: 'chat-menu', 'aria-label': 'Ещё', style: 'color:var(--muted)' }, icon('more'));
+  const menuBtn = h('button', { class: 'icon-btn', id: 'chat-menu', 'aria-label': 'Ещё', style: 'color:#fff' }, icon('more'));
   const top = h('div', { class: 'topbar' },
     h('button', { class: 'icon-btn', id: 'back', 'aria-label': 'Назад', onclick: () => { location.hash = '#/chats'; } }, icon('back')),
     h('div', { class: 'grow', style: 'min-width:0' }, title, sub), aiBtn, menuBtn);
   const offline = h('div', { class: 'offline hidden', id: 'offline' }, 'Нет связи — переподключаюсь…');
   const list = h('div', { class: 'msgs', id: 'msgs' });
   const status = h('div', { id: 'status' });
-  const listEnd = h('div');
-  list.append(status, listEnd);
+  list.append(status);
 
-  // composer
-  const chips = h('div', { class: 'chips' });
-  const contBtn = h('button', { class: 'chip', id: 'continue' }, icon('forward', 18), 'Продолжить сцену');
-  const regenBtn = h('button', { class: 'chip', id: 'regenerate' }, icon('refresh', 18), 'Перегенерировать');
-  chips.append(contBtn, regenBtn);
+  // composer: white icon tools at the edges, the input with a "*" button, send
+  const tool = (id, ic, label) => h('button', { class: 'tool', id, type: 'button', 'aria-label': label, title: label }, icon(ic, 22));
+  const editBtn = tool('edit-last', 'edit', 'Изменить последний ответ');
+  const suggestBtn = tool('suggest', 'sparkle', 'Варианты реплики');
+  const regenBtn = tool('regenerate', 'refresh', 'Перегенерировать');
+  const contBtn = tool('continue', 'forward', 'Продолжить сцену');
+  const sceneBtn = tool('photo', 'camera', 'Нарисовать текущую сцену (удерживай — своё описание)');
+  const uploadBtn = tool('upload', 'image', 'Отправить своё фото');
   const panelBox = h('div');
   const suggBox = h('div', { id: 'suggestions' });
-  const input = autoGrow(h('textarea', { class: 'field', id: 'chat-input', rows: 1, placeholder: '*действие* и реплика…' }), 140);
-  const bulb = h('button', { class: 'icon-btn bulb', id: 'suggest', 'aria-label': 'Варианты реплики' }, icon('bulb', 22));
-  const camBtn = h('button', { class: 'icon-btn hidden', id: 'photo', 'aria-label': 'Фото сцены' }, icon('camera', 26));
+  const input = autoGrow(h('textarea', { class: 'field', id: 'chat-input', rows: 1, placeholder: 'Сообщение…' }), 140);
+  const starBtn = h('button', { class: 'star', id: 'star', type: 'button', 'aria-label': 'Действие в звёздочках' }, '*');
   const sendBtn = h('button', { class: 'send', id: 'send', disabled: true, 'aria-label': 'Отправить' }, icon('send', 24));
-  const composer = h('div', { class: 'composer' }, panelBox, chips, suggBox,
-    h('div', { class: 'inputrow' }, camBtn, h('div', { class: 'inputwrap' }, input, bulb), sendBtn));
-  root.append(h('div', { class: 'chat' }, top, offline, list, composer));
+  const composer = h('div', { class: 'composer' }, panelBox, suggBox,
+    h('div', { class: 'toolbar' }, h('div', { class: 'tools' }, editBtn, suggestBtn, regenBtn, contBtn), h('div', { class: 'tools' }, sceneBtn, uploadBtn)),
+    h('div', { class: 'inputrow' }, h('div', { class: 'inputwrap' }, input, starBtn), sendBtn));
+  const chat = h('div', { class: 'chat' }, top, offline, list, composer);
+  root.append(chat);
+  const unfit = fitToViewport(chat);
 
   const active = () => st.gen && (st.gen.status === 'queued' || st.gen.status === 'running');
   const visible = () => Array.from(st.msgs.values()).filter((m) => !m.hidden).sort((a, b) => a.seq - b.seq);
   const lastText = () => { const v = visible().filter((m) => !m.image_id && m.kind !== 'system'); return v[v.length - 1]; };
+  const lastAiMsg = () => { const l = lastText(); return l && l.kind !== 'player' && l.generation_id ? l : null; };
   const canEdit = (m) => !m.image_id && m.kind !== 'system' && (m.kind !== 'player' || m.user_id === me.id);
   const chars = () => (st.room && st.room.story && st.room.story.characters) || [];
   const charById = (cid) => chars().find((c) => c.id === cid);
   const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 140;
   const toBottom = () => { list.scrollTop = list.scrollHeight; };
 
-  function longPress(el, m) {
-    if (!canEdit(m)) return;
+  function longPress(el, onLong) {
     let t;
-    const start = () => { t = setTimeout(() => openEdit(m), 520); };
+    const start = () => { t = setTimeout(onLong, 520); };
     const stop = () => clearTimeout(t);
     el.addEventListener('pointerdown', start);
-    ['pointerup', 'pointerleave', 'pointercancel', 'pointermove'].forEach((ev) => el.addEventListener(ev, (e) => { if (ev !== 'pointermove' || Math.abs(e.movementY) > 4) stop(); }));
-    el.addEventListener('contextmenu', (e) => { e.preventDefault(); openEdit(m); });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => el.addEventListener(ev, stop));
+    el.addEventListener('pointermove', (e) => { if (Math.abs(e.movementY) > 4 || Math.abs(e.movementX) > 4) stop(); });
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); onLong(); });
+  }
+
+  function photoEl(m, cls) {
+    const path = `/v1/rooms/${rid}/images/${m.image_id}`;
+    const frame = h('div', { class: 'frame' }, authImg(path, m.text));
+    frame.addEventListener('click', () => authImage(path).then((u) => {
+      const v = h('div', { class: 'viewer', onclick: () => v.remove() }, h('img', { src: u, alt: m.text }));
+      document.body.append(v);
+    }));
+    return h('div', { class: 'photo ' + (cls || ''), 'data-kind': 'photo' },
+      cls ? null : h('div', { class: 'lbl2' }, 'ФОТО СЦЕНЫ'), frame,
+      m.text && m.text !== 'Фото сцены' ? h('div', { class: 'cap' }, m.text) : null);
   }
 
   function msgEl(m) {
-    if (m.image_id) {
-      const frame = h('div', { class: 'frame' }, authImg(`/v1/rooms/${rid}/images/${m.image_id}`, m.text));
-      frame.addEventListener('click', () => authImage(`/v1/rooms/${rid}/images/${m.image_id}`).then((u) => {
-        const v = h('div', { class: 'viewer', onclick: () => v.remove() }, h('img', { src: u, alt: m.text }));
-        document.body.append(v);
-      }));
-      return h('div', { class: 'photo', 'data-kind': 'photo' }, h('div', { class: 'lbl2' }, 'ФОТО СЦЕНЫ'), frame,
-        m.text && m.text !== 'Фото сцены' ? h('div', { class: 'cap' }, m.text) : null);
-    }
+    if (m.image_id && m.kind !== 'player') return photoEl(m);
     if (m.kind === 'system') return h('div', { class: 'm-system' }, m.text);
     if (m.kind === 'narrator') {
       const el = h('div', { class: 'narrator', 'data-kind': 'narrator' }, h('div', { class: 'lbl2' }, 'РАССКАЗЧИК'),
         h('div', { class: 'txt' }, richText(m.text, true)), m.edited ? h('span', { class: 'edited' }, 'изменено') : null);
-      longPress(el, m);
+      if (canEdit(m)) longPress(el, () => openEdit(m));
       return el;
     }
     if (m.kind === 'character') {
       const c = charById(m.character_id);
       const path = c && c.avatar_image_id ? `/v1/rooms/${rid}/images/${c.avatar_image_id}` : null;
-      const av = avatar(m.speaker_name, path, 38);
+      const av = avatar(m.speaker_name, path, 36);
       av.style.cursor = 'pointer';
       av.addEventListener('click', () => { if (st.room && st.room.kind === 'chat' && m.character_id) location.hash = '#/persona/' + m.character_id; });
-      const bubble = h('div', { class: 'bubble char' }, richText(m.text, true), m.edited ? h('span', { class: 'edited' }, 'изменено') : null);
-      longPress(bubble, m);
-      return h('div', { class: 'm-row', 'data-kind': 'character' }, av, h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, m.speaker_name), bubble));
+      // thoughts and actions on the black background, every spoken part as its own bubble
+      const parts = segments(m.text).map((sg) => (sg.act ? h('div', { class: 'thought' }, sg.text) : h('div', { class: 'bubble char' }, sg.text)));
+      const col = h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, m.speaker_name), parts,
+        m.edited ? h('span', { class: 'edited' }, 'изменено') : null);
+      if (canEdit(m)) longPress(col, () => openEdit(m));
+      return h('div', { class: 'm-row', 'data-kind': 'character' }, av, col);
     }
     // player
     const mine = m.user_id === me.id;
     const seat = st.room && st.room.seats ? st.room.seats.find((s) => s.user && s.user.id === m.user_id) : null;
     const nick = seat && seat.user ? seat.user.nick : '';
     const label = m.speaker_name + (nick && nick !== m.speaker_name ? ' · ' + nick : '');
-    const bubble = h('div', { class: 'bubble ' + (mine ? 'mine' : 'friend') }, richText(m.text, false), m.edited ? h('span', { class: 'edited' }, 'изменено') : null);
-    longPress(bubble, m);
-    const col = h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, label), bubble);
-    const av = avatar(m.speaker_name, seat && seat.user ? userAvatarPath(seat.user) : null, 32);
+    const body = m.image_id ? photoEl(m, 'own')
+      : h('div', { class: 'bubble ' + (mine ? 'mine' : 'friend') }, richText(m.text, false), m.edited ? h('span', { class: 'edited' }, 'изменено') : null);
+    if (!m.image_id && canEdit(m)) longPress(body, () => openEdit(m));
+    const col = h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, label), body);
+    const av = avatar(m.speaker_name, seat && seat.user ? userAvatarPath(seat.user) : null, 30);
     return h('div', { class: 'm-row ' + (mine ? 'mine' : 'friend'), 'data-kind': mine ? 'mine' : 'friend' }, mine ? [col, av] : [av, col]);
   }
 
   function drawMessages() {
     const stick = nearBottom();
-    const vis = visible();
-    const keep = new Set();
     let prev = null;
-    for (const m of vis) {
-      const sig = `${m.rev}|${m.text}|${m.edited}|${st.room ? st.room.meta_rev : 0}`;
+    const keep = new Set();
+    for (const m of visible()) {
+      const sig = `${m.rev}|${m.text}|${m.edited}|${m.image_id}|${m.kind}|${st.room ? st.room.meta_rev : 0}`;
       let rec = els.get(m.id);
       if (!rec || rec.sig !== sig) {
         const el = msgEl(m);
@@ -793,8 +888,6 @@ function screenChat(root, rid) {
 
   function drawStatus() {
     const parts = [];
-    const last = lastText();
-    const lastAi = last && last.kind !== 'player' && last.generation_id ? last : null;
     for (const p of st.pending) {
       parts.push(h('div', { class: 'm-row mine pending' }, h('div', { class: 'm-col' },
         h('div', { class: 'bubble mine' }, richText(p.text, false)),
@@ -803,42 +896,39 @@ function screenChat(root, rid) {
           h('button', { class: 'link accent', onclick: () => { p.failed = false; sendPending(p); drawStatus(); } }, 'Повторить'),
           h('button', { class: 'link', onclick: () => { st.pending = st.pending.filter((x) => x !== p); drawStatus(); } }, 'Удалить')) : null)));
     }
+    if (st.uploading) parts.push(h('div', { class: 'status' }, 'Отправляю фото…'));
     const g = st.gen;
+    const last = lastText();
     if (g && g.status === 'queued') {
-      parts.push(h('div', { class: 'status', id: 'generation-status' }, g.queue_position ? `ИИ в очереди (${g.queue_position} перед вами)…` : 'ИИ думает…'));
+      parts.push(h('div', { class: 'status', id: 'generation-status' }, 'печатает', h('span', { class: 'typing' }, h('i'), h('i'), h('i'))));
     } else if (g && g.status === 'running') {
-      if (g.partial && g.partial.trim()) {
-        parts.push(h('div', { class: 'm-row', id: 'generation-status' }, avatar('…', null, 38),
-          h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, 'печатает', h('span', { class: 'typing' }, h('i'), h('i'), h('i'))),
-            h('div', { class: 'bubble char' }, g.partial.replace(/^[^:\n]{1,40}:\s*/, '')))));
-      } else {
-        parts.push(h('div', { class: 'status', id: 'generation-status' }, 'печатает', h('span', { class: 'typing' }, h('i'), h('i'), h('i'))));
-      }
+      const text = (g.partial || '').replace(/^[^:\n*]{1,40}:\s*/, '');
+      parts.push(h('div', { class: 'm-row', id: 'generation-status' }, avatar('…', null, 36),
+        h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, 'печатает', h('span', { class: 'typing' }, h('i'), h('i'), h('i'))),
+          text.trim() ? segments(text).map((sg) => (sg.act ? h('div', { class: 'thought' }, sg.text) : h('div', { class: 'bubble char' }, sg.text))) : null)));
     } else if (g && g.status === 'failed' && !(last && last.generation_id === g.id)) {
       parts.push(h('div', { class: 'failcard', id: 'generation-failed' }, h('b', null, 'Ответ не получился'),
         h('div', { class: 'muted small', style: 'margin:4px 0 10px' }, (g.error || '') + ' Твой ход сохранён, предыдущий ответ тоже.'),
         h('button', { class: 'btn primary small', id: 'retry', onclick: () => action('retry') }, 'Повторить генерацию')));
-    } else if (lastAi && canEdit(lastAi) && !st.pending.length) {
-      parts.push(h('button', { class: 'link edit-last', id: 'edit-last-ai', onclick: () => openEdit(lastAi) }, '✎ Изменить ответ'));
     }
     const j = st.job;
-    if (j && (j.status === 'queued' || j.status === 'running')) parts.push(h('div', { class: 'status' }, '📷 Рисую фото сцены…'));
-    else if (j && j.status === 'failed' && !st.jobSeen) parts.push(h('div', { class: 'failcard' }, h('b', null, 'Фото не получилось'), h('div', { class: 'muted small' }, j.error || '')));
+    if (j && (j.status === 'queued' || j.status === 'running')) parts.push(h('div', { class: 'status' }, 'Рисую сцену…'));
+    else if (j && j.status === 'failed' && j.id === st.jobFresh) parts.push(h('div', { class: 'failcard' }, h('b', null, 'Фото не получилось'), h('div', { class: 'muted small' }, j.error || '')));
     fill(status, parts);
-    // composer state
+    // tools
     const busy = active();
-    const lastIsAi = !!lastAi;
-    contBtn.disabled = busy || st.busy;
-    regenBtn.disabled = busy || st.busy || !lastIsAi;
-    sendBtn.disabled = !input.value.trim() || (busy && g.kind === 'regenerate');
     const room = st.room;
+    contBtn.disabled = busy || st.busy;
+    regenBtn.disabled = busy || st.busy || !lastAiMsg();
+    editBtn.disabled = busy || !lastAiMsg();
+    const drawing = j && (j.status === 'queued' || j.status === 'running');
+    sceneBtn.disabled = !room || !room.images_available || drawing;
+    sendBtn.disabled = !input.value.trim() || (busy && g.kind === 'regenerate');
     if (room) {
       title.textContent = room.title || (room.story && room.story.title) || 'Чат';
       sub.textContent = room.kind === 'chat' ? 'Личный чат' : seatLine(room);
-      aiBtn.classList.toggle('hidden', false);
+      aiBtn.classList.toggle('hidden', !room.local_available);
       aiBtn.replaceChildren(icon(room.ai_mode === 'cloud' ? 'cloud' : 'chip'));
-      aiBtn.style.color = room.ai_mode === 'cloud' ? 'var(--accent)' : 'var(--lilac)';
-      camBtn.classList.toggle('hidden', !room.images_available);
     }
   }
 
@@ -856,7 +946,6 @@ function screenChat(root, rid) {
     for (const m of s.messages) st.msgs.set(m.id, m);
     if (s.room) st.room = s.room;
     st.gen = s.generation;
-    if (s.image_job && st.job && s.image_job.id !== st.job.id) st.jobSeen = false;
     st.job = s.image_job;
     st.pv = s.pv;
     st.rev = s.rev;
@@ -878,7 +967,6 @@ function screenChat(root, rid) {
       } catch (e) {
         if (!alive || e.name === 'AbortError') return;
         if (e.status === 404) {
-          st.closed = true;
           list.replaceChildren(errorBox('Чат не найден или удалён.', () => { location.hash = '#/chats'; }));
           composer.remove();
           return;
@@ -924,7 +1012,6 @@ function screenChat(root, rid) {
   }
 
   function openEdit(m) {
-    st.editing = m;
     const ta = autoGrow(h('textarea', { class: 'field', id: 'edit-input', rows: 3 }), 220);
     ta.value = m.text;
     const save = h('button', { class: 'btn primary small', id: 'edit-save' }, 'Сохранить');
@@ -945,25 +1032,40 @@ function screenChat(root, rid) {
       ta, h('div', { class: 'row', style: 'justify-content:flex-end;margin-top:8px' }, save)));
     ta.focus();
   }
-  function closePanel() { st.editing = null; panelBox.replaceChildren(); }
+  function closePanel() { panelBox.replaceChildren(); }
 
-  function openPhoto() {
-    const what = h('input', { class: 'field', id: 'photo-prompt', placeholder: 'что показать (необязательно)', maxlength: 300 });
+  async function drawScene(prompt) {
+    try {
+      const r = await api(`/v1/rooms/${rid}/photo`, { method: 'POST', body: { client_id: uuid(), prompt: prompt || '' } });
+      st.job = r.image_job;
+      st.jobFresh = r.image_job && r.image_job.id;
+      drawStatus();
+      toBottom();
+    } catch (e) { toast(e.message); }
+  }
+  function openScenePrompt() {
+    const what = h('input', { class: 'field', id: 'photo-prompt', placeholder: 'что нарисовать', maxlength: 300 });
     const go = h('button', { class: 'btn primary small', id: 'photo-confirm' }, 'Нарисовать');
-    go.addEventListener('click', async () => {
-      go.disabled = true;
-      try {
-        const r = await api(`/v1/rooms/${rid}/photo`, { method: 'POST', body: { client_id: uuid(), prompt: what.value.trim() } });
-        st.job = r.image_job;
-        st.jobSeen = false;
-        closePanel();
-        drawStatus();
-      } catch (e) { toast(e.message); go.disabled = false; }
-    });
+    go.addEventListener('click', () => { closePanel(); drawScene(what.value.trim()); });
     panelBox.replaceChildren(h('div', { class: 'panel', id: 'photo-panel' },
-      h('div', { class: 'row' }, h('b', { class: 'grow' }, 'Фото сцены'), h('button', { class: 'link', onclick: closePanel }, 'Отмена')),
-      h('div', { class: 'muted small', style: 'margin:2px 0 8px' }, 'ИИ нарисует, что сейчас происходит, или то, что ты попросишь.'),
-      h('div', { class: 'row' }, what, go)));
+      h('div', { class: 'row' }, h('b', { class: 'grow' }, 'Картинка по описанию'), h('button', { class: 'link', onclick: closePanel }, 'Отмена')),
+      h('div', { class: 'row', style: 'margin-top:8px' }, what, go)));
+    what.focus();
+  }
+  async function uploadOwnPhoto() {
+    const f = await pickFile();
+    if (!f) return;
+    st.uploading++;
+    drawStatus();
+    toBottom();
+    try {
+      const fd = new FormData();
+      fd.append('file', await prepareImage(f, 1600), 'photo.jpg');
+      fd.append('client_id', uuid());
+      await api(`/v1/rooms/${rid}/upload`, { method: 'POST', form: fd });
+    } catch (e) { toast(e.message); }
+    st.uploading--;
+    drawStatus();
   }
 
   function drawSugg() {
@@ -978,23 +1080,39 @@ function screenChat(root, rid) {
 
   input.addEventListener('input', () => { sendBtn.disabled = !input.value.trim(); });
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } });
+  // "*": a pair of stars with the cursor between them; the keyboard stays open
+  starBtn.addEventListener('pointerdown', (e) => e.preventDefault());
+  starBtn.addEventListener('mousedown', (e) => e.preventDefault());
+  starBtn.addEventListener('click', () => {
+    const s = input.selectionStart ?? input.value.length;
+    const e = input.selectionEnd ?? s;
+    const v = input.value;
+    const sel = v.slice(s, e);
+    input.value = v.slice(0, s) + '*' + sel + '*' + v.slice(e);
+    const pos = s + 1 + sel.length;
+    input.focus();
+    input.setSelectionRange(pos, pos);
+    input.dispatchEvent(new Event('input'));
+  });
   sendBtn.addEventListener('click', send);
   contBtn.addEventListener('click', () => action('continue'));
   regenBtn.addEventListener('click', () => action('regenerate'));
-  camBtn.addEventListener('click', () => (panelBox.firstChild && panelBox.firstChild.id === 'photo-panel' ? closePanel() : openPhoto()));
-  bulb.addEventListener('click', async () => {
-    bulb.disabled = true;
-    bulb.style.opacity = '.4';
+  editBtn.addEventListener('click', () => { const m = lastAiMsg(); if (m) openEdit(m); });
+  uploadBtn.addEventListener('click', uploadOwnPhoto);
+  let sceneLong = false;
+  longPress(sceneBtn, () => { sceneLong = true; openScenePrompt(); });
+  sceneBtn.addEventListener('click', () => { if (sceneLong) { sceneLong = false; return; } drawScene(''); });
+  suggestBtn.addEventListener('click', async () => {
+    suggestBtn.disabled = true;
     try {
       st.suggestions = (await api(`/v1/rooms/${rid}/suggest`, { method: 'POST' })).suggestions || [];
       drawSugg();
     } catch (e) { toast(e.message); }
-    bulb.disabled = false;
-    bulb.style.opacity = '';
+    suggestBtn.disabled = false;
   });
   aiBtn.addEventListener('click', () => {
     const room = st.room;
-    if (!room) return;
+    if (!room || !room.local_available) return;
     const owner = room.my_role === 'owner';
     const opt = (mode, name, text, enabled) => h('button', {
       class: 'list-item', id: 'mode-' + mode, disabled: !enabled, style: room.ai_mode === mode ? 'outline:2px solid var(--accent)' : '',
@@ -1004,10 +1122,7 @@ function screenChat(root, rid) {
         try { await api(`/v1/rooms/${rid}/settings`, { method: 'PATCH', body: { ai_mode: mode } }); } catch (e) { toast(e.message); }
       },
     }, icon(mode === 'cloud' ? 'cloud' : 'chip'), h('div', { class: 'grow' }, h('div', { class: 't' }, name), h('div', { class: 's' }, text)));
-    const s = sheet('Кто ведёт сцену',
-      opt('local', 'Локальный ИИ', 'Модель на нашем сервере: бесплатно, проще.', owner),
-      opt('cloud', 'Облачный ИИ', 'Умнее и подробнее, рисует фото сцены.', owner && room.cloud_available),
-      owner ? null : h('div', { class: 'hint' }, 'Переключать может только хозяин сцены.'));
+    const s = sheet('Кто ведёт сцену', opt('local', 'Локальный ИИ', '', owner), opt('cloud', 'Облачный ИИ', '', owner && room.cloud_available));
   });
   menuBtn.addEventListener('click', () => {
     const room = st.room;
@@ -1015,6 +1130,7 @@ function screenChat(root, rid) {
     const owner = room.my_role === 'owner';
     const label = room.kind === 'chat' ? 'Удалить чат' : owner ? 'Удалить сцену' : 'Выйти из сцены';
     const s = sheet(null,
+      h('button', { class: 'btn ghost wide', style: 'margin-bottom:8px', onclick: () => { s.close(); openScenePrompt(); } }, 'Картинка по своему описанию'),
       h('button', { class: 'btn danger wide', id: 'leave', onclick: async () => {
         s.close();
         if (!(await confirmSheet(label + '?', owner ? 'Переписка удалится.' : 'Ты больше не увидишь эту сцену.', 'Да', true))) return;
@@ -1024,7 +1140,7 @@ function screenChat(root, rid) {
   });
 
   loop();
-  return () => { alive = false; ctrl.abort(); };
+  return () => { alive = false; ctrl.abort(); unfit(); };
 }
 
 // ------------------------------------------------------------------ friends
@@ -1111,6 +1227,42 @@ function screenFriends(root) {
 }
 
 // ------------------------------------------------------------------ profile
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (_) {
+    const t = h('textarea', { style: 'position:fixed;opacity:0' });
+    t.value = text;
+    document.body.append(t);
+    t.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (__) { ok = false; }
+    t.remove();
+    return ok;
+  }
+}
+
+function manageList(title, id, load, rowFor) {
+  const box = h('div', { id });
+  const wrap = h('div', null, h('div', { class: 'section' }, title), box);
+  const refresh = async () => {
+    try {
+      const items = await load();
+      fill(box, items.length ? items.map((it) => rowFor(it, refresh)) : h('div', { class: 'muted small' }, 'Пусто.'));
+    } catch (e) { fill(box, h('div', { class: 'error' }, e.message)); }
+  };
+  refresh();
+  return wrap;
+}
+function trashButton(label, question, text, onYes) {
+  return h('button', { class: 'icon-btn', 'aria-label': label, title: label, style: 'color:var(--error)', onclick: async (e) => {
+    e.stopPropagation();
+    if (!(await confirmSheet(question, text, 'Удалить', true))) return;
+    try { await onYes(); } catch (ex) { toast(ex.message); }
+  } }, icon('trash', 22));
+}
+
 async function screenProfile(root) {
   const page = tabPage(root, 'profile', 'Профиль');
   let u;
@@ -1138,6 +1290,20 @@ async function screenProfile(root) {
   saveAbout.addEventListener('click', async () => {
     try { u = (await api('/v1/me', { method: 'PATCH', body: { about: about.value.trim() } })).user; toast('Сохранено'); } catch (e) { toast(e.message); }
   });
+
+  // password change
+  const oldPw = h('input', { class: 'field', id: 'old-password', type: 'password', placeholder: 'Старый пароль', autocomplete: 'current-password' });
+  const newPw = h('input', { class: 'field', id: 'change-password', type: 'password', placeholder: 'Новый пароль (от 6 символов)', autocomplete: 'new-password', style: 'margin-top:8px' });
+  const pwBtn = h('button', { class: 'btn ghost wide', id: 'change-password-save', style: 'margin-top:8px' }, 'Сменить пароль');
+  pwBtn.addEventListener('click', async () => {
+    try {
+      await api('/v1/me/password', { method: 'POST', body: { password: newPw.value, old_password: oldPw.value } });
+      oldPw.value = ''; newPw.value = '';
+      toast('Пароль изменён');
+    } catch (e) { toast(e.message); }
+  });
+
+  // transfer code: tap to copy
   const codeBox = h('div', { id: 'transfer-box' });
   let tick;
   const codeBtn = h('button', { class: 'btn ghost wide', id: 'transfer-code-button', style: 'margin-top:12px' }, 'Получить код переноса');
@@ -1146,19 +1312,21 @@ async function screenProfile(root) {
       const r = await api('/v1/me/transfer-code', { method: 'POST' });
       const until = Date.now() + r.ttl_s * 1000;
       clearInterval(tick);
+      const codeEl = h('button', { class: 'code', id: 'transfer-code', style: 'margin-top:14px;display:block;width:100%;background:none;border:0',
+        onclick: async () => { toast((await copyText(r.code)) ? 'Код скопирован' : 'Не получилось скопировать'); } }, r.code);
+      const left = h('div', { class: 'center muted small' });
+      fill(codeBox, codeEl, left, h('div', { class: 'center faint small' }, 'Нажми на код, чтобы скопировать'));
       const draw = () => {
-        const left = Math.max(0, Math.round((until - Date.now()) / 1000));
-        fill(codeBox, left > 0
-          ? [h('div', { class: 'code', id: 'transfer-code', style: 'margin-top:14px' }, r.code),
-            h('div', { class: 'center muted small' }, `Действует ещё ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`)]
-          : h('div', { class: 'center error' }, 'Код истёк — получи новый.'));
-        if (!left) clearInterval(tick);
+        const sec = Math.max(0, Math.round((until - Date.now()) / 1000));
+        left.textContent = sec > 0 ? `Действует ещё ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : 'Код истёк — получи новый.';
+        if (!sec) { clearInterval(tick); codeEl.style.opacity = '.3'; }
       };
       draw();
       tick = setInterval(draw, 1000);
       codeBtn.textContent = 'Новый код';
     } catch (e) { toast(e.message); }
   });
+
   put(page, av,
     h('div', { class: 'row', style: 'justify-content:center' },
       h('button', { class: 'link accent', onclick: pick }, u.avatar_image_id ? 'Сменить фото' : 'Добавить фото'),
@@ -1170,13 +1338,33 @@ async function screenProfile(root) {
     h('div', { class: 'card', style: 'margin-top:20px' },
       h('div', { style: 'font-weight:600' }, 'Вход с другого устройства'),
       h('div', { class: 'muted small', style: 'margin-top:6px;line-height:1.5' },
-        'На другом телефоне или в другом браузере открой GramSoul, выбери «Вход с другого устройства по коду переноса» и введи ник и этот код. Код одноразовый, действует 10 минут.'),
+        'Войди по нику и паролю. Или получи одноразовый код переноса (действует 10 минут) и введи его в «Вход по коду переноса».'),
       codeBtn, codeBox),
+    h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'font-weight:600;margin-bottom:8px' }, 'Пароль'), oldPw, newPw, pwBtn),
+    manageList('Мои персонажи', 'my-personas', async () => (await api('/v1/personas?scope=mine')).personas, (p, refresh) =>
+      h('div', { class: 'list-item', 'data-persona': p.name },
+        avatar(p.name || '?', personaAvatarPath(p), 40),
+        h('button', { class: 'grow', style: 'background:none;border:0;text-align:left;padding:0', onclick: () => { location.hash = '#/persona/' + p.id; } },
+          h('div', { class: 't ellipsis' }, p.name || 'Без имени'), h('div', { class: 's' }, p.status === 'draft' ? 'черновик' : p.visibility === 'public' ? 'публичный' : 'личный')),
+        trashButton('Удалить персонажа', 'Удалить персонажа?', 'Карточка исчезнет у всех. Чаты с ним останутся, но новых ответов не будет.',
+          async () => { await api('/v1/personas/' + p.id, { method: 'DELETE' }); refresh(); }))),
+    manageList('Мои истории', 'my-stories', async () => (await api('/v1/stories')).stories, (st, refresh) =>
+      h('div', { class: 'list-item' },
+        h('div', { class: 'grow' }, h('div', { class: 't ellipsis' }, st.title), h('div', { class: 's' }, st.is_demo ? 'демо-история' : 'своя история')),
+        trashButton('Удалить историю', 'Удалить историю?', 'Вместе с ней удалятся все её сцены и переписка в них.',
+          async () => { await api('/v1/stories/' + st.id, { method: 'DELETE' }); refresh(); }))),
+    manageList('Мои чаты', 'my-rooms', async () => (await api('/v1/rooms')).rooms, (r, refresh) =>
+      h('div', { class: 'list-item' },
+        h('button', { class: 'grow', style: 'background:none;border:0;text-align:left;padding:0', onclick: () => { location.hash = '#/chat/' + r.id; } },
+          h('div', { class: 't ellipsis' }, r.story_title), h('div', { class: 's ellipsis' }, r.last_message || '')),
+        trashButton(r.my_role === 'owner' ? 'Удалить' : 'Выйти', r.my_role === 'owner' ? 'Удалить переписку?' : 'Выйти из сцены?',
+          r.my_role === 'owner' ? 'Переписка удалится навсегда.' : 'Ты больше не увидишь эту сцену.',
+          async () => { await api('/v1/rooms/' + r.id, { method: 'DELETE' }); refresh(); }))),
     installHint(),
     h('div', { class: 'card', style: 'margin-top:14px' },
       h('div', { class: 'muted small' }, 'Android-приложение: ', h('a', { href: '/fonar.apk', download: 'GramSoul.apk', style: 'color:var(--accent)' }, 'скачать GramSoul.apk'))),
     h('button', { class: 'btn danger wide', id: 'logout', style: 'margin-top:18px', onclick: async () => {
-      if (!(await confirmSheet('Выйти из аккаунта?', 'Войти снова под этим ником можно только с кодом переноса с другого устройства, где ты в аккаунте. Если такого нет — ник будет потерян.', 'Выйти', true))) return;
+      if (!(await confirmSheet('Выйти из аккаунта?', 'Войти снова можно по нику и паролю.', 'Выйти', true))) return;
       try { await api('/v1/logout', { method: 'POST' }); } catch (_) {}
       store.token = null; store.me = null;
       location.hash = '#/login';
@@ -1187,6 +1375,7 @@ async function screenProfile(root) {
 // ------------------------------------------------------------------ router
 const ROUTES = [
   [/^#\/login$/, screenLogin],
+  [/^#\/set-password$/, screenSetPassword],
   [/^#\/characters$/, screenCharacters],
   [/^#\/persona\/([\w-]+)$/, screenPersona],
   [/^#\/persona-edit(?:\/([\w-]+))?$/, screenPersonaEdit],
@@ -1203,6 +1392,10 @@ async function render() {
   document.querySelectorAll('.scrim, .viewer').forEach((x) => x.remove());
   let hash = location.hash || '#/characters';
   if (!store.token && hash !== '#/login') { location.replace('#/login'); return; }
+  if (store.token && (!store.me || store.me.has_password === undefined)) {
+    try { store.me = (await api('/v1/me')).user; } catch (_) { if (!store.token) return; }
+  }
+  if (store.token && store.me && store.me.has_password === false && hash !== '#/set-password') { location.replace('#/set-password'); return; }
   const route = ROUTES.find(([re]) => re.test(hash));
   if (!route) { location.replace('#/characters'); return; }
   const root = $('#app');

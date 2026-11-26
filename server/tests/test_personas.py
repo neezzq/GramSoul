@@ -106,8 +106,8 @@ async def test_avatar_styles_validation_refusal_and_limits(client):
     assert "prompt" not in styles[0]  # style prompts never leave the server
     r = await client.post("/v1/avatars/generate", json={"description": "рыжая девушка", "style": "pixel"}, headers=h)
     assert r.status_code == 400 and r.json()["detail"]["code"] == "bad_style"
-    r = await client.post("/v1/avatars/generate", json={"description": "ой", "style": "anime"}, headers=h)
-    assert r.status_code == 400
+    r = await client.post("/v1/avatars/generate", json={"description": " ", "name": "", "style": "anime"}, headers=h)
+    assert r.status_code == 400 and "Лелуш" in r.json()["detail"]["message"]
     r = await client.post("/v1/avatars/generate", json={"description": "кто-то #refuse", "style": "anime"}, headers=h)
     assert r.status_code == 422 and r.json()["detail"]["code"] == "avatar_refused"
     # 3 per minute per user (the three attempts above count too)
@@ -126,3 +126,18 @@ async def test_fill_from_idea(client):
     assert r.status_code == 502 and r.json()["detail"]["code"] == "ai_bad_output"
     # nothing was saved — fill only suggests
     assert (await client.get("/v1/personas", params={"scope": "mine"}, headers=h)).json()["personas"] == []
+
+
+async def test_avatar_from_a_known_character_name_and_usage_is_counted(client):
+    h, me = await register(client, "Mira")
+    # no appearance at all — the name of a known character is enough
+    r = await client.post("/v1/avatars/generate", json={"name": "Лелуш", "description": "Лелуш Ви Британия из аниме Код Гиасс",
+                                                         "style": "anime"}, headers=h)
+    assert r.status_code == 200, r.text
+    r = await client.post("/v1/avatars/generate", json={"name": "Лелуш Ви Британия", "description": "", "style": "painted"}, headers=h)
+    assert r.status_code == 200, r.text
+    import app.main as main
+    rows = main.state.db.all("SELECT kind, SUM(prompt_tokens+completion_tokens) t, COUNT(*) n FROM usage_events "
+                             "WHERE user_id=(SELECT id FROM users WHERE nick='Mira') GROUP BY kind")
+    by = {r["kind"]: (r["t"], r["n"]) for r in rows}
+    assert by["avatar"][1] == 4 and by["avatar"][0] > 0  # subject text + image, twice

@@ -244,6 +244,22 @@ CREATE TABLE IF NOT EXISTS room_personas(
   PRIMARY KEY(room_id, persona_id)
 );
 CREATE INDEX IF NOT EXISTS room_personas_persona ON room_personas(persona_id);
+CREATE TABLE IF NOT EXISTS usage_events(
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  kind TEXT NOT NULL,           -- text | avatar | photo
+  model TEXT,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0,
+  completion_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS usage_user ON usage_events(user_id, kind);
+CREATE TABLE IF NOT EXISTS admin_sessions(
+  token_hash TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
 """
 
 # columns added after the first release (ALTER TABLE keeps existing data)
@@ -255,6 +271,10 @@ MIGRATIONS = [
     ("users", "about", "ALTER TABLE users ADD COLUMN about TEXT NOT NULL DEFAULT ''"),
     ("messages", "persona_id", "ALTER TABLE messages ADD COLUMN persona_id INTEGER REFERENCES personas(id) ON DELETE SET NULL"),
     ("messages", "edited_at", "ALTER TABLE messages ADD COLUMN edited_at INTEGER"),
+    ("users", "password_hash", "ALTER TABLE users ADD COLUMN password_hash TEXT"),
+    # what an image is for: '' (avatars, covers, AI pictures) or 'chat' (a player's own photo, kept 7 days)
+    ("images", "purpose", "ALTER TABLE images ADD COLUMN purpose TEXT NOT NULL DEFAULT ''"),
+    ("images", "expires_at", "ALTER TABLE images ADD COLUMN expires_at INTEGER"),
 ]
 
 

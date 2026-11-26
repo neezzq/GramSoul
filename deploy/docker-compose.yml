@@ -1,5 +1,6 @@
-# Fonar backend: Caddy (HTTPS, the only public entry) -> FastAPI -> Ollama.
-# Ollama and the SQLite database are never exposed to the internet.
+# GramSoul backend: Caddy (HTTPS, the only public entry) -> FastAPI -> OpenRouter (cloud models).
+# The SQLite database is never exposed to the internet. The small local model (Ollama) is off:
+# it starts only with LOCAL_AI=on and `docker compose --profile local up -d`.
 name: fonar
 
 services:
@@ -33,13 +34,12 @@ services:
       OLLAMA_URL: http://ollama:11434
     volumes:
       - ./data/api:/data
-    depends_on:
-      - ollama
     mem_limit: 300m
     logging: *logging
 
   ollama:
     image: ollama/ollama:0.40.17
+    profiles: ["local"]
     restart: unless-stopped
     environment:
       OLLAMA_NUM_PARALLEL: "1"        # one generation at a time

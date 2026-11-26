@@ -29,6 +29,15 @@ class LLMResult:
     prompt_ms: int | None = None
     output_ms: int | None = None
     total_ms: int | None = None
+    cost: float | None = None  # OpenRouter credits (USD) for this call
+
+
+@dataclass
+class ImageResult:
+    data: bytes
+    prompt_tokens: int | None = None
+    output_tokens: int | None = None
+    cost: float | None = None
 
 
 OnDelta = Callable[[str], Awaitable[None]]
@@ -237,19 +246,36 @@ async def _cloud_chat(messages: list[dict], stop: list[str] | None, on_delta: On
         except httpx.HTTPError as e:
             raise LLMError(f"Нет связи с OpenRouter: {type(e).__name__}") from e
     return LLMResult(text="".join(parts), prompt_tokens=usage.get("prompt_tokens"),
-                     output_tokens=usage.get("completion_tokens"), total_ms=int((time.monotonic() - t0) * 1000))
+                     output_tokens=usage.get("completion_tokens"), total_ms=int((time.monotonic() - t0) * 1000),
+                     cost=_cost(usage))
 
 
-async def generate_image(prompt: str, aspect_ratio: str = "3:4") -> bytes:
-    """Returns encoded image bytes (PNG/JPEG/WebP) from the cloud image model."""
+def _cost(usage: dict) -> float | None:
+    c = usage.get("cost") if usage else None
+    try:
+        return float(c) if c is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def generate_image(prompt: str, aspect_ratio: str = "3:4", references: list[bytes] | None = None) -> ImageResult:
+    """Encoded image bytes (PNG/JPEG/WebP) from the cloud image model, with usage.
+    references: portraits (JPEG) the model should keep the characters' looks from; if the model
+    does not accept image input, the picture is drawn from the text alone."""
     if settings.llm_backend == "fake":
-        return _fake_image(prompt)
+        return ImageResult(_fake_image(prompt), 10, 1290, 0.039 if not references else 0.04)
     headers = _cloud_headers()
+    content: str | list = prompt
+    if references:
+        content = [{"type": "text", "text": prompt}] + [
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(r).decode()}}
+            for r in references[:3]]
     body = {
         "model": settings.cloud_image_model,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": content}],
         "modalities": ["image", "text"],
         "image_config": {"aspect_ratio": aspect_ratio},
+        "usage": {"include": True},
     }
     url = settings.openrouter_base_url.rstrip("/") + "/chat/completions"
     try:
@@ -258,8 +284,14 @@ async def generate_image(prompt: str, aspect_ratio: str = "3:4") -> bytes:
     except httpx.HTTPError as e:
         raise LLMError(f"Нет связи с OpenRouter: {type(e).__name__}") from e
     if resp.status_code != 200:
+        if references and resp.status_code in (400, 404, 415, 422):
+            return await generate_image(prompt, aspect_ratio, None)
         raise _cloud_error(resp.status_code, resp.text)
     data = resp.json()
+    usage = data.get("usage") or {}
+
+    def result(raw: bytes) -> ImageResult:
+        return ImageResult(raw, usage.get("prompt_tokens"), usage.get("completion_tokens"), _cost(usage))
     if data.get("error"):
         raise LLMError("OpenRouter: " + str((data["error"] or {}).get("message", data["error"]))[:200])
     for ch in data.get("choices") or []:
@@ -267,14 +299,14 @@ async def generate_image(prompt: str, aspect_ratio: str = "3:4") -> bytes:
         for img in msg.get("images") or []:
             url_ = ((img.get("image_url") or {}).get("url")) or ""
             if url_.startswith("data:") and "," in url_:
-                return base64.b64decode(url_.split(",", 1)[1])
+                return result(base64.b64decode(url_.split(",", 1)[1]))
         # some providers put the data URL into content parts
         content = msg.get("content")
         if isinstance(content, list):
             for part in content:
                 u = ((part or {}).get("image_url") or {}).get("url", "")
                 if u.startswith("data:") and "," in u:
-                    return base64.b64decode(u.split(",", 1)[1])
+                    return result(base64.b64decode(u.split(",", 1)[1]))
     raise LLMError("Модель не вернула картинку (возможно, запрос отклонён фильтром). Попробуй описать иначе.")
 
 
@@ -309,9 +341,10 @@ async def _fake_chat(messages: list[dict], on_delta: OnDelta | None) -> LLMResul
         await asyncio.sleep(0.05)
         raise LLMError("Тестовая ошибка модели")
     if "#echo_system" in last:  # tests can inspect which prompt variant was used
-        return LLMResult(text="Рассказчик: " + ("ОБЛАКО" if "подробно" in system else "ЛОКАЛЬНО") + f" №{n}")
+        return LLMResult(text="Рассказчик: " + ("ОБЛАКО" if ("подробно" in system or "живо" in system) else "ЛОКАЛЬНО") + f" №{n}")
     if system.startswith("Convert the character description"):
-        return LLMResult(text="REFUSE" if "#refuse" in last else "An adult woman with silver hair and a green coat, calm smile.")
+        return LLMResult(text="REFUSE" if "#refuse" in last else "An adult woman with silver hair and a green coat, calm smile.",
+                         prompt_tokens=40, output_tokens=15, cost=0.00002)
     if system.startswith("PERSONA_JSON"):
         if "#badjson" in last:
             return LLMResult(text="Не могу.")
@@ -346,4 +379,4 @@ async def _fake_chat(messages: list[dict], on_delta: OnDelta | None) -> LLMResul
         await asyncio.sleep(delay / 10)
         if on_delta:
             await on_delta(piece + " ")
-    return LLMResult(text=text, prompt_tokens=100, output_tokens=20, prompt_ms=10, output_ms=10, total_ms=20)
+    return LLMResult(text=text, prompt_tokens=100, output_tokens=20, prompt_ms=10, output_ms=10, total_ms=20, cost=0.0001)

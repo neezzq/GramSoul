@@ -19,10 +19,12 @@ def _png() -> bytes:
     return buf.getvalue()
 
 
-def make_transport(seen: list, status: int = 200, reasoning_400: bool = False):
+def make_transport(seen: list, status: int = 200, reasoning_400: bool = False, no_image_input: bool = False):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         seen.append({"auth": request.headers.get("authorization"), "body": body})
+        if no_image_input and isinstance(body["messages"][0]["content"], list):
+            return httpx.Response(400, json={"error": {"message": "image input is not supported"}})
         if reasoning_400 and "reasoning" in body:
             return httpx.Response(400, json={"error": {"message": "reasoning is not supported"}})
         if status != 200:
@@ -30,7 +32,8 @@ def make_transport(seen: list, status: int = 200, reasoning_400: bool = False):
         if body.get("modalities"):
             url = "data:image/png;base64," + base64.b64encode(_png()).decode()
             return httpx.Response(200, json={"choices": [{"message": {"content": "", "images": [
-                {"type": "image_url", "image_url": {"url": url}}]}}]})
+                {"type": "image_url", "image_url": {"url": url}}]}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 1290, "cost": 0.039}})
         sse = (": OPENROUTER PROCESSING\n\n"
                'data: {"choices":[{"delta":{"content":"Рассказчик: Ветер"}}]}\n\n'
                'data: {"choices":[{"delta":{"content":" стих."}}]}\n\n'
@@ -89,10 +92,26 @@ async def test_errors_are_readable(cloud, status, needle):
 async def test_image(cloud):
     seen = []
     cloud["transport"] = make_transport(seen)
-    data = await llm.generate_image("маяк")
-    assert data.startswith(b"\x89PNG")
+    img = await llm.generate_image("маяк")
+    assert img.data.startswith(b"\x89PNG") and img.output_tokens == 1290 and img.cost == 0.039
     assert seen[0]["body"]["modalities"] == ["image", "text"]
     assert seen[0]["body"]["model"] == llm.settings.cloud_image_model
+
+
+async def test_image_with_reference_portraits_and_fallback(cloud):
+    seen = []
+    cloud["transport"] = make_transport(seen)
+    img = await llm.generate_image("сцена", references=[b"\xff\xd8jpeg-1", b"\xff\xd8jpeg-2"])
+    parts = seen[0]["body"]["messages"][0]["content"]
+    assert parts[0] == {"type": "text", "text": "сцена"}
+    assert [p["type"] for p in parts[1:]] == ["image_url", "image_url"]
+    assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert img.data.startswith(b"\x89PNG")
+    # a model without image input: drawn from the text alone
+    seen.clear()
+    cloud["transport"] = make_transport(seen, no_image_input=True)
+    img = await llm.generate_image("сцена", references=[b"x"])
+    assert img.data.startswith(b"\x89PNG") and isinstance(seen[-1]["body"]["messages"][0]["content"], str)
 
 
 async def test_no_key(monkeypatch):
