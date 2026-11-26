@@ -31,6 +31,10 @@ class CharacterIn(BaseModel):
     speech_style: str = ""
     relationships: dict[str, str] = Field(default_factory=dict)
     example_lines: str = ""
+    # voice-over (None = keep what the card has, for older app versions)
+    voice: str | None = Field(default=None, max_length=32)
+    voice_manner: str | None = Field(default=None, max_length=200)
+    voice_timbre: str | None = Field(default=None, max_length=200)
 
 
 class StartMessageIn(BaseModel):
@@ -47,6 +51,12 @@ class StoryIn(BaseModel):
     cover_image_id: str | None = None
     characters: list[CharacterIn] = Field(default_factory=list)
     start_messages: list[StartMessageIn] = Field(default_factory=list)
+    # None = keep (older app versions do not send it); new stories are private
+    visibility: str | None = Field(default=None, pattern="^(public|private)$")
+
+
+class VisibilityIn(BaseModel):
+    visibility: str = Field(pattern="^(public|private)$")
 
 
 class QuickStoryIn(BaseModel):
@@ -70,6 +80,9 @@ class CharacterPatch(BaseModel):
     speech_style: str | None = None
     relationships: dict[str, str] | None = None
     example_lines: str | None = None
+    voice: str | None = Field(default=None, max_length=32)
+    voice_manner: str | None = Field(default=None, max_length=200)
+    voice_timbre: str | None = Field(default=None, max_length=200)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +112,25 @@ def story_row(db: Database, user: User, story_pid: str):
     return row
 
 
+def visible_story(db: Database, user: User, story_pid: str):
+    """Own stories and the published stories of others."""
+    row = db.one("SELECT * FROM stories WHERE public_id=?", (story_pid,))
+    if not row or (row["owner_id"] != user.id and row["visibility"] != "public"):
+        raise not_found("История не найдена")
+    return row
+
+
+def story_image_allowed(db: Database, user: User, story_pid: str, iid: str) -> bool:
+    """Cover and character portraits of a story the player can see (catalog of public stories)."""
+    try:
+        row = visible_story(db, user, story_pid)
+    except ApiError:
+        return False
+    if row["cover_image_id"] == iid:
+        return True
+    return db.one("SELECT 1 FROM characters WHERE story_id=? AND avatar_image_id=?", (row["id"], iid)) is not None
+
+
 def character_dict(row, pid_by_id: dict[int, str]) -> dict[str, Any]:
     rel_raw = json.loads(row["relationships"] or "{}")
     return {
@@ -109,12 +141,13 @@ def character_dict(row, pid_by_id: dict[int, str]) -> dict[str, Any]:
         "avatar_image_id": row["avatar_image_id"],
         **{f: row[f] for f in CARD_FIELDS},
         "relationships": rel_raw,
+        "voice": row["voice"] or "", "voice_manner": row["voice_manner"] or "", "voice_timbre": row["voice_timbre"] or "",
         "version": row["version"],
         "updated_at": row["updated_at"],
     }
 
 
-def story_dict(db: Database, row, full: bool = True) -> dict[str, Any]:
+def story_dict(db: Database, row, full: bool = True, user: User | None = None) -> dict[str, Any]:
     chars = db.all("SELECT * FROM characters WHERE story_id=? ORDER BY position", (row["id"],))
     pid_by_id = {c["id"]: c["public_id"] for c in chars}
     d = {
@@ -128,7 +161,12 @@ def story_dict(db: Database, row, full: bool = True) -> dict[str, Any]:
         "is_demo": bool(row["is_demo"]),
         "version": row["version"],
         "updated_at": row["updated_at"],
+        "visibility": row["visibility"] or "private",
+        "mine": user is None or row["owner_id"] == user.id,
     }
+    if user is not None and row["owner_id"] != user.id:
+        a = db.one("SELECT public_id, nick FROM users WHERE id=?", (row["owner_id"],))
+        d["author"] = {"id": a["public_id"], "nick": a["nick"]} if a else None
     if full:
         d["characters"] = [character_dict(c, pid_by_id) for c in chars]
         sms = db.all("SELECT * FROM start_messages WHERE story_id=? ORDER BY position", (row["id"],))
@@ -143,9 +181,70 @@ def story_dict(db: Database, row, full: bool = True) -> dict[str, Any]:
     return d
 
 
-def list_stories(db: Database, user: User) -> list[dict]:
-    rows = db.all("SELECT * FROM stories WHERE owner_id=? ORDER BY is_demo DESC, updated_at DESC", (user.id,))
-    return [story_dict(db, r, full=False) for r in rows]
+def list_stories(db: Database, user: User, scope: str = "mine", q: str = "") -> list[dict]:
+    """scope: mine (default, older apps), public = published stories of others, all = mine + public."""
+    rows: list = []
+    if scope in ("mine", "all"):
+        rows += db.all("SELECT * FROM stories WHERE owner_id=? ORDER BY is_demo DESC, updated_at DESC", (user.id,))
+    if scope in ("public", "all"):
+        rows += db.all("SELECT * FROM stories WHERE visibility='public' AND owner_id<>? ORDER BY updated_at DESC LIMIT 300",
+                       (user.id,))
+    words = [w.replace("ё", "е") for w in (q or "").casefold().split() if w]
+    if words:
+        rows = [r for r in rows if all(w in (r["title"] + " " + r["description"]).casefold().replace("ё", "е") for w in words)]
+    return [story_dict(db, r, full=False, user=user) for r in rows[:150]]
+
+
+def set_visibility(db: Database, user: User, story_pid: str, visibility: str) -> dict:
+    """Publish or hide a story at any time, also when scenes are already being played in it."""
+    row = story_row(db, user, story_pid)
+    db.run("UPDATE stories SET visibility=?, updated_at=? WHERE id=?", (visibility, now_ms(), row["id"]))
+    return story_dict(db, db.one("SELECT * FROM stories WHERE id=?", (row["id"],)), user=user)
+
+
+def clone_story(db: Database, user: User, src) -> Any:
+    """Another player starts a published story: they play their own private copy, which they may edit.
+    Pictures are copied too, so the copy keeps working if the author deletes the original."""
+    from .images import read_image, save_image
+    ts = now_ms()
+
+    def copy_img(iid: str | None) -> str | None:
+        data = read_image(iid) if iid else None
+        if not data:
+            return None
+        img = db.one("SELECT width, height FROM images WHERE id=?", (iid,))
+        return save_image(db, user.id, data, img["width"] if img else 0, img["height"] if img else 0)
+
+    with db.tx():
+        pid = new_id()
+        cur = db.run(
+            "INSERT INTO stories(public_id, owner_id, title, description, intro, world_rules, start_scene, cover_image_id, "
+            "is_demo, visibility, source_id, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,0,'private',?,?,?)",
+            (pid, user.id, src["title"], src["description"], src["intro"], src["world_rules"], src["start_scene"],
+             copy_img(src["cover_image_id"]), src["id"], ts, ts))
+        sid = cur.lastrowid
+        id_map: dict[int, int] = {}
+        pid_map: dict[str, str] = {}
+        chars = db.all("SELECT * FROM characters WHERE story_id=? ORDER BY position", (src["id"],))
+        for c in chars:
+            npid = new_id()
+            ccur = db.run(
+                "INSERT INTO characters(public_id, story_id, position, role, name, avatar_image_id, age, appearance, habits, "
+                "personality, motivation, backstory, speech_style, relationships, example_lines, voice, voice_manner, "
+                "voice_timbre, version, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?, '{}', ?,?,?,?, 1, ?)",
+                (npid, sid, c["position"], c["role"], c["name"], copy_img(c["avatar_image_id"]), c["age"], c["appearance"],
+                 c["habits"], c["personality"], c["motivation"], c["backstory"], c["speech_style"], c["example_lines"],
+                 c["voice"], c["voice_manner"], c["voice_timbre"], ts))
+            id_map[c["id"]] = ccur.lastrowid
+            pid_map[c["public_id"]] = npid
+        for c in chars:
+            rel = {pid_map.get(k, k): v for k, v in json.loads(c["relationships"] or "{}").items()}
+            db.run("UPDATE characters SET relationships=? WHERE id=?",
+                   (json.dumps(rel, ensure_ascii=False, sort_keys=True), id_map[c["id"]]))
+        for m in db.all("SELECT * FROM start_messages WHERE story_id=? ORDER BY position", (src["id"],)):
+            db.run("INSERT INTO start_messages(story_id, position, speaker_kind, character_id, text) VALUES(?,?,?,?,?)",
+                   (sid, m["position"], m["speaker_kind"], id_map.get(m["character_id"]), m["text"]))
+    return db.one("SELECT * FROM stories WHERE id=?", (sid,))
 
 
 def _validate_story(db: Database, user: User, s: StoryIn) -> None:
@@ -182,6 +281,7 @@ def _write_story_children(db: Database, story_id: int, s: StoryIn, existing: dic
             "role": c.role, "name": c.name.strip(), "avatar_image_id": c.avatar_image_id,
             **{f: (getattr(c, f) or "").strip() for f in CARD_FIELDS},
         }
+        voice = _voice_values(c, old)
         if old:
             changed = any(old[k] != v for k, v in values.items()) or old["position"] != pos
             db.run(
@@ -193,6 +293,7 @@ def _write_story_children(db: Database, story_id: int, s: StoryIn, existing: dic
                  values["speech_style"], values["example_lines"], 1 if changed else 0, ts, old["id"]),
             )
             cid, cpid = old["id"], old["public_id"]
+            db.run("UPDATE characters SET voice=?, voice_manner=?, voice_timbre=? WHERE id=?", (*voice, cid))
         else:
             cpid = new_id()
             cur = db.run(
@@ -205,6 +306,7 @@ def _write_story_children(db: Database, story_id: int, s: StoryIn, existing: dic
             )
             cid = cur.lastrowid
             created_ids.add(cid)
+            db.run("UPDATE characters SET voice=?, voice_manner=?, voice_timbre=? WHERE id=?", (*voice, cid))
         keep_ids.add(cid)
         for ref in filter(None, [c.id, c.key, cpid]):
             ref_to_id[ref] = cid
@@ -241,6 +343,14 @@ def _write_story_children(db: Database, story_id: int, s: StoryIn, existing: dic
                    (story_id, pos, "character", cid, m.text.strip()))
 
 
+def _voice_values(c: CharacterIn, old) -> tuple[str, str, str]:
+    from .voice import normalize
+    cur = (old["voice"], old["voice_manner"], old["voice_timbre"]) if old else ("", "", "")
+    return normalize(c.voice if c.voice is not None else cur[0],
+                     c.voice_manner if c.voice_manner is not None else cur[1],
+                     c.voice_timbre if c.voice_timbre is not None else cur[2])
+
+
 def create_story(db: Database, user: User, s: StoryIn, is_demo: bool = False) -> dict:
     _validate_story(db, user, s)
     ts = now_ms()
@@ -248,12 +358,12 @@ def create_story(db: Database, user: User, s: StoryIn, is_demo: bool = False) ->
         pid = new_id()
         cur = db.run(
             "INSERT INTO stories(public_id, owner_id, title, description, intro, world_rules, start_scene, cover_image_id, "
-            "is_demo, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            "is_demo, visibility, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, user.id, s.title.strip(), s.description.strip(), s.intro.strip(), s.world_rules.strip(),
-             s.start_scene.strip(), s.cover_image_id, 1 if is_demo else 0, ts, ts),
+             s.start_scene.strip(), s.cover_image_id, 1 if is_demo else 0, s.visibility or "private", ts, ts),
         )
         _write_story_children(db, cur.lastrowid, s, {})
-    return story_dict(db, db.one("SELECT * FROM stories WHERE public_id=?", (pid,)))
+    return story_dict(db, db.one("SELECT * FROM stories WHERE public_id=?", (pid,)), user=user)
 
 
 def replace_story(db: Database, user: User, story_pid: str, s: StoryIn) -> dict:
@@ -267,13 +377,13 @@ def replace_story(db: Database, user: User, story_pid: str, s: StoryIn) -> dict:
     with db.tx():
         db.run(
             "UPDATE stories SET title=?, description=?, intro=?, world_rules=?, start_scene=?, cover_image_id=?, "
-            "version=version+1, updated_at=? WHERE id=?",
+            "visibility=?, version=version+1, updated_at=? WHERE id=?",
             (s.title.strip(), s.description.strip(), s.intro.strip(), s.world_rules.strip(), s.start_scene.strip(),
-             s.cover_image_id, ts, row["id"]),
+             s.cover_image_id, s.visibility or row["visibility"] or "private", ts, row["id"]),
         )
         _write_story_children(db, row["id"], s, existing)
         bump_story_rooms(db, row["id"])
-    return story_dict(db, db.one("SELECT * FROM stories WHERE id=?", (row["id"],)))
+    return story_dict(db, db.one("SELECT * FROM stories WHERE id=?", (row["id"],)), user=user)
 
 
 def quick_story(db: Database, user: User, q: QuickStoryIn) -> dict:
@@ -343,6 +453,12 @@ def patch_character(db: Database, user: User, story_pid: str, char_pid: str, p: 
         v = getattr(p, f)
         if v is not None and v.strip() != c[f]:
             updates[f] = v.strip()
+    if p.voice is not None or p.voice_manner is not None or p.voice_timbre is not None:
+        from .voice import normalize
+        v, m, t = normalize(p.voice if p.voice is not None else c["voice"],
+                            p.voice_manner if p.voice_manner is not None else c["voice_manner"],
+                            p.voice_timbre if p.voice_timbre is not None else c["voice_timbre"])
+        db.run("UPDATE characters SET voice=?, voice_manner=?, voice_timbre=? WHERE id=?", (v, m, t, c["id"]))
     if p.relationships is not None:
         valid = {x["public_id"] for x in db.all("SELECT public_id FROM characters WHERE story_id=?", (row["id"],))}
         rel = {k: v.strip() for k, v in p.relationships.items() if (k in valid or k.startswith("seat:")) and v.strip()}

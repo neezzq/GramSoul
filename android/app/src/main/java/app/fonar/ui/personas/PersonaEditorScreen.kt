@@ -101,6 +101,9 @@ fun PersonaEditorScreen(nav: NavHostController, id: String?) {
     var tags by rememberSaveable { mutableStateOf("") }
     var visibility by rememberSaveable { mutableStateOf("private") }
     var avatarId by rememberSaveable { mutableStateOf<String?>(null) }
+    var voice by rememberSaveable { mutableStateOf("") }
+    var voiceManner by rememberSaveable { mutableStateOf("") }
+    var voiceTimbre by rememberSaveable { mutableStateOf("") }
     var more by rememberSaveable { mutableStateOf(false) }
     var idea by rememberSaveable { mutableStateOf("") }
     var filling by remember { mutableStateOf(false) }
@@ -116,6 +119,7 @@ fun PersonaEditorScreen(nav: NavHostController, id: String?) {
                 name = p.name; firstMessage = p.first_message; description = p.description
                 backstory = p.backstory.orEmpty(); personality = p.personality.orEmpty()
                 tags = p.tags.joinToString(", "); visibility = p.visibility; avatarId = p.avatar_image_id
+                voice = p.voice; voiceManner = p.voice_manner; voiceTimbre = p.voice_timbre
                 more = backstory.isNotBlank() || personality.isNotBlank() || tags.isNotBlank()
                 loaded = true
             } catch (e: Exception) {
@@ -152,6 +156,7 @@ fun PersonaEditorScreen(nav: NavHostController, id: String?) {
                     backstory = backstory.trim(), personality = personality.trim(),
                     tags = tags.split(',', ';').map { it.trim() }.filter { it.isNotEmpty() },
                     visibility = visibility, status = if (publish) "published" else "draft", avatar_image_id = avatarId,
+                    voice = voice, voice_manner = voiceManner.trim(), voice_timbre = voiceTimbre.trim(),
                 )
                 val saved = if (id == null) graph.api.createPersona(req).persona else graph.api.updatePersona(id, req).persona
                 nav.popBackStack()
@@ -283,6 +288,11 @@ fun PersonaEditorScreen(nav: NavHostController, id: String?) {
                 Text("Предыстория и характер видны только тебе — их получает ИИ.", color = Fonar.Faint,
                     style = MaterialTheme.typography.bodySmall)
             }
+
+            app.fonar.ui.components.VoiceFields(
+                voice, voiceManner, voiceTimbre, { voice = it }, { voiceManner = it }, { voiceTimbre = it },
+                tagPrefix = "persona_voice",
+            )
 
             Text("Все персонажи по умолчанию 18+.", color = Fonar.Muted, style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.testTag("adult_note"))

@@ -171,6 +171,7 @@ fun StoryEditorScreen(nav: NavHostController, storyId: String?, draftId: String?
             start_scene = s.start_scene, cover_image_id = s.cover_image_id,
             characters = s.characters.map { it.copy(key = it.key ?: it.id) },
             start_messages = s.start_messages.filter { it.text.isNotBlank() },
+            visibility = s.visibility,
         )
         saving = true
         scope.launch {
@@ -264,6 +265,21 @@ fun StoryEditorScreen(nav: NavHostController, storyId: String?, draftId: String?
                     hint = "Эпоха, магия, тон, запреты…")
                 Field("Стартовая сцена", s.start_scene, { update(s.copy(start_scene = it)) }, minLines = 2, maxLength = 1000,
                     hint = "Где начинается действие и что вокруг")
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp).testTag("story_public_row"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Публичная история", fontWeight = FontWeight.SemiBold)
+                        Text(if (s.visibility == "public") "Её видят все; другие играют свою копию и не меняют твою."
+                            else "Видишь только ты.", color = Fonar.Faint, style = MaterialTheme.typography.bodySmall)
+                    }
+                    androidx.compose.material3.Switch(
+                        checked = s.visibility == "public",
+                        onCheckedChange = { on -> update(s.copy(visibility = if (on) "public" else "private")) },
+                        modifier = Modifier.testTag("story_public"),
+                    )
+                }
 
                 SectionTitle("Персонажи · ${s.characters.size}/$MAX_CHARACTERS")
                 s.characters.forEachIndexed { i, c ->

@@ -123,7 +123,7 @@ def room_detail(db: Database, user: User, room) -> dict:
     if room["story_id"] is None:
         sd = _chat_story(db, room)
     else:
-        sd = story_dict(db, db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],)), full=True)
+        sd = story_dict(db, db.one("SELECT * FROM stories WHERE id=?", (room["story_id"],)), full=True, user=user)
     invite = db.one("SELECT ri.*, u.public_id upid, u.nick FROM room_invites ri JOIN users u ON u.id=ri.to_user "
                     "WHERE ri.room_id=? ORDER BY ri.updated_at DESC LIMIT 1", (room["id"],))
     return {
@@ -141,6 +141,7 @@ def room_detail(db: Database, user: User, room) -> dict:
         "local_available": settings.local_ai,
         "cloud_available": settings.cloud_available,
         "images_available": settings.cloud_available,
+        "voice_available": settings.tts_available,
         "ai_models": {"local": settings.llm_model, "cloud": settings.cloud_text_model, "image": settings.cloud_image_model},
         "summary": room["summary"],
         "invite": ({"id": invite["public_id"], "status": invite["status"],
@@ -153,8 +154,12 @@ def room_detail(db: Database, user: User, room) -> dict:
 
 def create_room(db: Database, user: User, story_pid: str) -> dict:
     story = db.one("SELECT * FROM stories WHERE public_id=?", (story_pid,))
-    if not story or story["owner_id"] != user.id:
+    if not story or (story["owner_id"] != user.id and story["visibility"] != "public"):
         raise not_found("История не найдена")
+    if story["owner_id"] != user.id:
+        # someone else's published story: the player gets their own copy (editable, the original stays as it is)
+        from .stories import clone_story
+        story = clone_story(db, user, story)
     count = db.one("SELECT COUNT(*) n FROM rooms WHERE owner_id=?", (user.id,))["n"]
     if count >= 200:
         raise ApiError(400, "too_many_rooms", "Слишком много сцен. Удали старые.")

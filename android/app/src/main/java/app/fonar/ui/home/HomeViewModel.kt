@@ -24,6 +24,8 @@ data class HomeState(
     val loading: Boolean = true,
     val offline: Boolean = false,
     val stories: List<StoryDto> = emptyList(),
+    /** Published stories of other players (catalog). */
+    val publicStories: List<StoryDto>? = null,
     val drafts: List<StoryDraft> = emptyList(),
     val rooms: List<RoomListItem> = emptyList(),
     val invites: List<InviteDto> = emptyList(),
@@ -177,6 +179,30 @@ class HomeViewModel(private val g: AppGraph) : ViewModel() {
                 val room = g.api.createRoom(storyId).room
                 if (withFriend != null) g.api.invite(room.id, withFriend)
                 onReady(room)
+                refresh()
+            } catch (e: Exception) {
+                _state.update { it.copy(message = err(e)) }
+            }
+        }
+    }
+
+    fun loadPublicStories(q: String = "") {
+        viewModelScope.launch {
+            try {
+                val list = g.api.publicStories(q).stories
+                _state.update { it.copy(publicStories = list) }
+            } catch (e: Exception) {
+                _state.update { it.copy(message = err(e), publicStories = it.publicStories ?: emptyList()) }
+            }
+        }
+    }
+
+    /** Publish or hide a story (also when scenes in it already exist). */
+    fun setStoryVisibility(id: String, public: Boolean) {
+        viewModelScope.launch {
+            try {
+                g.api.setStoryVisibility(id, if (public) "public" else "private")
+                _state.update { it.copy(message = if (public) "История опубликована" else "История снова личная") }
                 refresh()
             } catch (e: Exception) {
                 _state.update { it.copy(message = err(e)) }

@@ -75,11 +75,12 @@ async function loadUsers(body) {
     h('div', { class: 'card' }, 'Токены на текст', h('b', null, fmt(t.text))),
     h('div', { class: 'card' }, 'Токены на аватарки', h('b', null, fmt(t.avatar))),
     h('div', { class: 'card' }, 'Токены на фото сцен', h('b', null, fmt(t.photo))),
+    h('div', { class: 'card' }, 'Озвучка, символов', h('b', null, fmt(t.voice || 0))),
     h('div', { class: 'card' }, 'Потрачено всего', h('b', null, money(t.cost))));
   const cols = [
     ['nick', 'Ник'], ['created_at', 'Регистрация'], ['last_seen_at', 'Был(а)'], ['text_tokens', 'Текст, токены', 1],
     ['avatar_tokens', 'Аватарки, токены', 1], ['avatars', 'Аватарок', 1], ['photo_tokens', 'Фото сцен, токены', 1],
-    ['scene_photos', 'Фото сцен', 1], ['photos', 'Свои фото', 1], ['personas', 'Персонажей', 1], ['rooms', 'Чатов', 1], ['cost', 'Стоимость', 1]];
+    ['scene_photos', 'Фото сцен', 1], ['voice_chars', 'Озвучка, симв.', 1], ['photos', 'Свои фото', 1], ['personas', 'Персонажей', 1], ['rooms', 'Чатов', 1], ['cost', 'Стоимость', 1]];
   let sortKey = 'cost';
   let desc = true;
   const tbody = h('tbody');
@@ -93,7 +94,8 @@ async function loadUsers(body) {
       h('td', null, h('b', null, u.nick), u.has_password ? '' : h('span', { class: 'pill grey', style: 'margin-left:6px' }, 'без пароля')),
       h('td', null, date(u.created_at)), h('td', null, date(u.last_seen_at)),
       h('td', { class: 'num' }, fmt(u.text_tokens)), h('td', { class: 'num' }, fmt(u.avatar_tokens)), h('td', { class: 'num' }, fmt(u.avatars)),
-      h('td', { class: 'num' }, fmt(u.photo_tokens)), h('td', { class: 'num' }, fmt(u.scene_photos)), h('td', { class: 'num' }, fmt(u.photos)),
+      h('td', { class: 'num' }, fmt(u.photo_tokens)), h('td', { class: 'num' }, fmt(u.scene_photos)), h('td', { class: 'num' }, fmt(u.voice_chars || 0)),
+      h('td', { class: 'num' }, fmt(u.photos)),
       h('td', { class: 'num' }, fmt(u.personas)), h('td', { class: 'num' }, fmt(u.rooms)), h('td', { class: 'num' }, money(u.cost)),
       h('td', null, h('button', { class: 'btn danger small', 'data-delete': u.nick, title: 'Удалить игрока со всеми его данными', onclick: async () => {
         if (!confirm(`Удалить игрока «${u.nick}» навсегда — вместе с его персонажами, историями, чатами и фото?`)) return;

@@ -25,6 +25,11 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.fonar.data.CharacterPatch
+import app.fonar.data.CharacterDto
+import app.fonar.data.PersonaReq
+import app.fonar.data.StartMessageDto
+import app.fonar.data.StoryReq
+import app.fonar.ui.components.VoicePlayer
 import app.fonar.data.SessionStore
 import com.github.takahirom.roborazzi.captureRoboImage
 import org.junit.Assert.assertEquals
@@ -184,7 +189,8 @@ class TwoPlayerUiTest {
                 .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
             compose.waitTag("transfer_code")
             // a tap on the code copies it
-            compose.onNodeWithTag("transfer_code").performClick()
+            compose.onNodeWithTag("transfer_code").performScrollTo()
+                .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
             compose.waitText("Код скопирован")
             assertTrue(clipboardText().orEmpty().matches(Regex("[A-Z0-9]{4}-[A-Z0-9]{4}")))
             shot("05b_profile")
@@ -260,6 +266,87 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("start_button").performClick()
             compose.waitTag("my_nick")
             assertEquals(newNick, (app.graph.session.value as SessionStore.State.Active).session.nick)
+        }
+    }
+
+    /** Photos from the device are prepared and uploaded (the bug: every upload failed); gender in the profile;
+     *  publishing a character after a chat exists; published stories of others; voice-over of a line. */
+    @Test
+    fun photosGenderPublishingStoriesAndVoice() {
+        val author = RemotePlayer(backend, uniq("Автор"))
+        val title = uniq("Трамвай")
+        val story = author.call {
+            createStory(StoryReq(
+                title = title, description = "Последний рейс через спящий город.", intro = "",
+                world_rules = "Наши дни.", start_scene = "Пустой вагон.", cover_image_id = null,
+                characters = listOf(
+                    CharacterDto(key = "c1", role = "npc", name = "Кондуктор", voice = "onyx",
+                        voice_manner = "устало и тихо", voice_timbre = "низкий"),
+                    CharacterDto(key = "h1", role = "hero", name = "Пассажир"),
+                ),
+                start_messages = listOf(StartMessageDto("c1", "*Кондуктор поднимает глаза* — Конечная не скоро.")),
+            ))
+        }.story
+        author.call { setStoryVisibility(story.id!!, "public") }
+        ActivityScenario.launch(MainActivity::class.java).use {
+            register(uniq("Мира"))
+            val api = appApi(app, backend)
+            // a picture from the device: decoded, scaled, sent (this used to fail with «Не удалось открыть картинку»)
+            val file = java.io.File(app.cacheDir, "pick.jpg").also { it.writeBytes(jpeg()) }
+            val img = kotlinx.coroutines.runBlocking { api.uploadImage(app, android.net.Uri.fromFile(file), 512) }
+            assertTrue(img.id.isNotBlank())
+            kotlinx.coroutines.runBlocking { api.setAvatar(img.id) }
+            // gender: characters address the player by it
+            compose.onNodeWithTag("profile_button").performClick()
+            compose.waitTag("gender_female")
+            compose.onNodeWithTag("gender_female").performClick()
+            compose.waitUntil(10_000) { kotlinx.coroutines.runBlocking { api.me() }.user.gender == "female" }
+            shot("05f_profile_gender")
+            compose.onNodeWithTag("back").performClick()
+            // a private character with a chat can be published from its page
+            val p = kotlinx.coroutines.runBlocking {
+                api.createPersona(PersonaReq("Лиса", "*Лиса щурится* — Ну привет.", "рыжая", "", "",
+                    emptyList(), "private", "draft", voice = "nova", voice_manner = "игриво"))
+            }.persona
+            kotlinx.coroutines.runBlocking { api.startChat(p.id) }
+            compose.onNodeWithTag("tab_characters").performClick()
+            compose.waitTag("persona_card_Лиса")
+            compose.onNodeWithTag("persona_card_Лиса").performClick()
+            compose.waitTag("persona_publish_toggle")
+            compose.onNodeWithTag("persona_publish_toggle").performClick()
+            compose.waitUntil(10_000) { author.call { personas("лиса") }.personas.any { it.id == p.id } }
+            compose.waitText("Сделать личным")
+            compose.onNodeWithTag("back").performClick()
+            // stories of others: «Общие» → play → the player gets an own copy
+            compose.onNodeWithTag("tab_stories").performClick()
+            compose.waitTag("stories_public")
+            compose.onNodeWithTag("stories_public").performClick()
+            compose.onNodeWithTag("stories_list").performScrollToNode(hasTestTag("play_$title"))
+            compose.waitTag("play_$title")
+            shot("03b_public_stories")
+            compose.onNodeWithTag("play_$title").performClick()
+            compose.waitTag("chat_input")
+            compose.waitText("Конечная не скоро")
+            val mine = kotlinx.coroutines.runBlocking { api.stories() }.stories.filter { !it.is_demo && it.title == title }
+            assertEquals(1, mine.size)
+            assertTrue(mine[0].id != story.id)
+            // voice-over of the conductor's line
+            val roomId = kotlinx.coroutines.runBlocking { api.rooms() }.rooms.first { it.story_title == title }.id
+            val line = kotlinx.coroutines.runBlocking { api.sync(roomId, 0, -1, 0) }.messages.first { it.kind == "character" }
+            val path = java.io.File(app.cacheDir, "voice_${line.id.hashCode().toUInt()}.mp3").absolutePath
+            org.robolectric.shadows.ShadowMediaPlayer.addMediaInfo(
+                org.robolectric.shadows.util.DataSource.toDataSource(path),
+                org.robolectric.shadows.ShadowMediaPlayer.MediaInfo(600_000, 0),  // long enough not to end during the check
+            )
+            compose.waitTag("speak_button")
+            compose.onAllNodesWithTag("speak_button", useUnmergedTree = true)[0].performClick()
+            // (a UI query in the condition lets the main thread deliver the server's answer)
+            compose.waitUntil(20_000) {
+                compose.onAllNodesWithTag("speak_button", useUnmergedTree = true).fetchSemanticsNodes()
+                VoicePlayer.playing.value == line.id
+            }
+            shot("33_voice_playing")
+            VoicePlayer.stop()
         }
     }
 
@@ -553,6 +640,7 @@ class TwoPlayerUiTest {
         val nick = uniq("Tim")
         ActivityScenario.launch(MainActivity::class.java).use {
             register(nick)
+            compose.onNodeWithTag("stories_list").performScrollToNode(hasTestTag("play_Маяк на Стеклянном берегу"))
             compose.onNodeWithTag("play_Маяк на Стеклянном берегу").performClick()
             compose.waitTag("chat_input")
             repeat(3) { i ->

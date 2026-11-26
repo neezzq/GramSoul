@@ -351,7 +351,11 @@ def main():
 
     # 4. A: «Играть с другом» on the demo story
     tap_id(A, "tab_stories")
-    tap_id(A, f"play_friend_{DEMO}")
+    try:
+        tap_id(A, f"play_friend_{DEMO}", timeout=15)
+    except TimeoutError:  # below the fold on a short screen
+        scroll_down_a_bit(A)
+        tap_id(A, f"play_friend_{DEMO}")
     tap_id(A, f"pick_{nick_b}")
     tap_id(A, "invite_confirm")
     wait(A, rid="chat_input", timeout=60)

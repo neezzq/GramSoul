@@ -177,6 +177,23 @@ fun PersonaScreen(nav: NavHostController, id: String) {
                     Pill("18+", Fonar.Muted)
                     p.tags.forEach { Pill("#$it", Fonar.Lamp) }
                 }
+                if (p.mine) {
+                    // publish or hide at any time — also when chats with this character already exist
+                    val public = p.visibility == "public" && p.status == "published"
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                try {
+                                    persona = graph.api.setPersonaVisibility(id, if (public) "private" else "public").persona
+                                    error = null
+                                } catch (e: Exception) {
+                                    error = errText(e)
+                                }
+                            }
+                        },
+                        modifier = Modifier.padding(top = 10.dp).testTag("persona_publish_toggle"),
+                    ) { Text(if (public) "Сделать личным" else "Опубликовать для всех") }
+                }
                 Column(Modifier.fillMaxWidth()) {
                     if (p.description.isNotBlank()) {
                         SectionTitle("Описание", Modifier.padding(top = 18.dp))

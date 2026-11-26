@@ -73,6 +73,8 @@ class Worker:
                 if time.monotonic() - last_cleanup > 3600:  # hourly: players' photos older than a week
                     last_cleanup = time.monotonic()
                     expire_chat_photos(self.db)
+                    from .voice import clean_cache
+                    await asyncio.to_thread(clean_cache)
                 picked = self._next_job()
                 if picked is None:
                     self._wake.clear()
@@ -140,7 +142,8 @@ class Worker:
             if s["user"] is None:
                 continue
             hero = heroes[s["index"]] if s["index"] < len(heroes) else None
-            seats.append(P.Seat(nick=s["user"]["nick"], hero_name=s["hero_name"], hero=hero))
+            g = self.db.one("SELECT gender FROM users WHERE public_id=?", (s["user"]["id"],))
+            seats.append(P.Seat(nick=s["user"]["nick"], hero_name=s["hero_name"], hero=hero, gender=g["gender"] if g else ""))
         params = [room["id"], room["summary_upto_seq"]]
         excl = ""
         if exclude_generation is not None:
@@ -183,12 +186,13 @@ class Worker:
         if not ps:
             return None, None
         p = ps[0]
-        owner = self.db.one("SELECT nick FROM users WHERE id=?", (room["owner_id"],))
+        owner = self.db.one("SELECT nick, gender FROM users WHERE id=?", (room["owner_id"],))
         inp = P.ChatPromptInput(
             name=p["name"] or "Персонаж", description=p["description"], personality=p["personality"],
             backstory=p["backstory"], user_name=owner["nick"] if owner else "Игрок", setting=room["setting"],
             summary=room["summary"], history=self._history(room, lim["recent"], exclude_generation), mode=mode,
             num_ctx=lim["num_ctx"], num_predict=lim["num_predict"], rich=lim["rich"],
+            user_gender=owner["gender"] if owner else "",
         )
         return inp, p
 
@@ -351,20 +355,23 @@ class Worker:
             title, world, history = story["title"], story["world_rules"], inp.history
         refs = [b for b in (read_image(i) for i in avatar_ids[:3]) if b]
         n_portraits = len(refs)
-        # the previous picture of this chat keeps the place and the people the same
+        # the previous picture of this chat keeps the place and the people the same — but only when it was
+        # drawn in the same style, otherwise the model would copy the old style instead of the chosen one
+        style = room["image_style"] or PS.SCENE_STYLE_DEFAULT
         last = None
         if not job["user_prompt"].strip():
-            prev = db.one("SELECT image_id FROM messages WHERE room_id=? AND kind='narrator' AND image_id IS NOT NULL "
-                          "AND hidden=0 ORDER BY seq DESC LIMIT 1", (room["id"],))
-            last = read_image(prev["image_id"]) if prev else None
+            prev = db.one("SELECT image_id, style FROM image_jobs WHERE room_id=? AND status='done' AND image_id IS NOT NULL "
+                          "AND id<>? ORDER BY id DESC LIMIT 1", (room["id"], job["id"]))
+            if prev and (prev["style"] or PS.SCENE_STYLE_DEFAULT) == style:
+                last = read_image(prev["image_id"])
         if last:
             refs.append(last)
         prompt = P.image_prompt(title, world, room["scene_location"], in_frame, history, job["user_prompt"],
-                                with_references=bool(refs), style=PS.scene_style_prompt(room["image_style"]),
+                                with_references=bool(refs), style=PS.scene_style_prompt(style),
                                 notes=room["image_notes"] or "", portraits=n_portraits, last_scene=bool(last))
         with db.tx():
-            db.run("UPDATE image_jobs SET status='running', model=?, prompt=? WHERE id=?",
-                   (settings.cloud_image_model, prompt, job["id"]))
+            db.run("UPDATE image_jobs SET status='running', model=?, prompt=?, style=? WHERE id=?",
+                   (settings.cloud_image_model, prompt, style, job["id"]))
             _bump(db, room["id"])
         _notify_room(room["id"])
         try:

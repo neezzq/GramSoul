@@ -96,6 +96,12 @@ async function apiAs(token, p, method = 'GET', body) {
     await page.click('#regenerate');
     await page.waitForFunction((b) => { const x = document.querySelectorAll('.bubble.char'); return x.length && x[x.length - 1].innerText !== b && !document.querySelector('#generation-status'); }, before, { timeout: 20000 });
     ok('regenerate replaces the reply', true);
+    // voice-over of the character's line (the server answers with MP3)
+    const [speech] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/speech') && r.request().method() === 'POST', { timeout: 20000 }),
+      page.locator('[data-kind="character"] [data-speak]').last().click(),
+    ]);
+    ok('voice-over of a character line', speech.status() === 200 && (speech.headers()['content-type'] || '').includes('audio/mpeg'));
     // picture settings of this chat: a fixed scene description and a style («Эстетика» by default)
     await page.click('#photo');
     await page.click('#photo-settings');
@@ -158,7 +164,54 @@ async function apiAs(token, p, method = 'GET', body) {
     await page.click('#nick-save');
     await page.waitForSelector('#profile-nick >> text=' + me2);
     ok('nick changed in the profile', true, me2);
+    // gender: characters address the player by it
+    await page.click('#gender-female');
+    await page.waitForSelector('#gender-female.on');
+    const tok = await page.evaluate(() => localStorage.getItem('gs_token'));
+    ok('gender saved in the profile', (await apiAs(tok, '/v1/me')).user.gender === 'female');
     await shot('web_05_profile');
+
+    // a character with a chat can be published from its page; its voice is set in the editor
+    const lisa = (await apiAs(tok, '/v1/personas', 'POST', { name: 'Лиса', first_message: '*Лиса щурится* — Ну привет.', description: 'рыжая', visibility: 'private', status: 'draft' })).persona;
+    await apiAs(tok, `/v1/personas/${lisa.id}/chats`, 'POST');
+    await page.goto(base + '/app/#/persona/' + lisa.id);
+    await page.click('#persona-publish-toggle');
+    await page.waitForSelector('#persona-publish-toggle >> text=Сделать личным');
+    ok('character published although a chat exists', (await apiAs(tok, '/v1/personas/' + lisa.id)).persona.visibility === 'public');
+    await page.goto(base + '/app/#/persona-edit/' + lisa.id);
+    await page.waitForSelector('#p-voice option[value="nova"]', { state: 'attached' });
+    await page.selectOption('#p-voice', 'nova');
+    await page.fill('#p-manner', 'игриво, с улыбкой');
+    await shot('web_05b_voice');
+    const [pre] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/v1/voice/preview'), { timeout: 20000 }),
+      page.click('#p-preview'),
+    ]);
+    await page.click('#publish');
+    await page.waitForSelector('#persona-chat-new');
+    const lisa2 = (await apiAs(tok, '/v1/personas/' + lisa.id)).persona;
+    ok('character voice set in the editor (with a sample)', pre.status() === 200 && lisa2.voice === 'nova' && lisa2.voice_manner === 'игриво, с улыбкой');
+
+    // a story: world, characters with voices, first message; published for everyone
+    const storyTitle = uniq('Трамвай');
+    await page.goto(base + '/app/#/characters');
+    await page.click('#kind-stories');
+    await page.click('#create-persona');
+    await page.click('#create-story-item');
+    await page.fill('#s-title', storyTitle);
+    await page.fill('#s-desc', 'Последний рейс через спящий город.');
+    await page.fill('#s-chars input[data-field="name"]', 'Кондуктор');
+    await page.waitForSelector('#c0-voice option[value="onyx"]', { state: 'attached' });
+    await page.selectOption('#c0-voice', 'onyx');
+    await page.click('#s-add-start');
+    await page.fill('#s-starts textarea', '*Кондуктор поднимает глаза* — Конечная не скоро.');
+    await shot('web_08_story_editor');
+    await page.click('#s-save');
+    await page.waitForSelector('#story-play');
+    await page.click('#story-publish-toggle');
+    await page.waitForSelector('text=История опубликована');
+    const myStories = (await apiAs(tok, '/v1/stories')).stories.filter((x) => x.title === storyTitle);
+    ok('story created in the editor and published', myStories.length === 1 && myStories[0].visibility === 'public');
 
     // another device: nick + password
     const ctx2 = await browser.newContext({ ...phone });
@@ -186,6 +239,15 @@ async function apiAs(token, p, method = 'GET', body) {
     await p3.click('#set-password');
     await p3.waitForSelector('#persona-search');
     ok('old account is asked for a password first', true);
+    // another player finds the published story and plays an own copy
+    await p3.click('#kind-stories');
+    await p3.waitForSelector(`[data-story="${storyTitle}"]`);
+    await p3.click(`[data-story="${storyTitle}"]`);
+    await p3.waitForSelector('#story-play');
+    await shot('web_09_public_story', p3);
+    await p3.click('#story-play');
+    await p3.waitForSelector('text=Конечная не скоро', { timeout: 20000 });
+    ok('another player plays a published story (own copy)', true);
 
     // admin page
     if (adminPassword) {

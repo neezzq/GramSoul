@@ -12,10 +12,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from . import admin as A, llm, nick as nickmod, personas as PS, rooms as R, stories as S
+from . import admin as A, llm, nick as nickmod, personas as PS, rooms as R, stories as S, usage, voice as V
 from .common import (ApiError, User, auth_user, client_ip, hash_password, hash_token, hub, new_id, new_token, not_found,
                      verify_password)
 from .config import settings
@@ -92,7 +92,7 @@ async def health():
             "model": settings.llm_model if settings.local_ai else None,
             "model_ready": (await llm.model_available()) if settings.local_ai else None,
             "cloud": bool(settings.openrouter_api_key), "cloud_model": settings.cloud_text_model,
-            "image_model": settings.cloud_image_model,
+            "image_model": settings.cloud_image_model, "voice": settings.tts_available, "voice_model": settings.tts_model,
             "queue": state.worker.queue_length(), "busy": state.worker.busy}
 
 
@@ -181,11 +181,12 @@ def _me_dict(row) -> dict:
     full = row if "password_hash" in row.keys() else None
     out = _user_dict(row)
     out["has_password"] = bool(full["password_hash"]) if full is not None else False
+    out["gender"] = (row["gender"] if "gender" in row.keys() else "") or ""
     return out
 
 
 def _me_row(d: Database, uid: int):
-    return d.one("SELECT id, public_id, nick, avatar_image_id, about, password_hash FROM users WHERE id=?", (uid,))
+    return d.one("SELECT id, public_id, nick, avatar_image_id, about, password_hash, gender FROM users WHERE id=?", (uid,))
 
 
 @app.get("/v1/me")
@@ -243,6 +244,7 @@ class ProfileIn(BaseModel):
     about: str | None = Field(default=None, max_length=2000)
     avatar_image_id: str | None = Field(default=None, max_length=64)
     nick: str | None = Field(default=None, max_length=64)
+    gender: str | None = Field(default=None, pattern="^(|male|female)$")
 
 
 @app.patch("/v1/me")
@@ -254,6 +256,9 @@ async def update_me(body: ProfileIn, user: User = Depends(current_user), d: Data
             raise ApiError(400, "about_too_long", f"«О себе» — не длиннее {settings.about_max_chars} символов.")
         sets.append("about=?")
         params.append(about)
+    if "gender" in body.model_fields_set and body.gender is not None:
+        sets.append("gender=?")
+        params.append(body.gender)
     if "avatar_image_id" in body.model_fields_set:
         iid = body.avatar_image_id or None
         if iid:
@@ -598,6 +603,11 @@ async def list_personas(q: str = "", scope: str = "all", user: User = Depends(cu
     return PS.listing(d, user, q[:100], scope)
 
 
+@app.patch("/v1/personas/{pid}/visibility")
+async def persona_visibility(pid: str, body: PS.VisibilityIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    return PS.set_visibility(d, user, pid, body.visibility)
+
+
 @app.post("/v1/personas", status_code=201)
 async def create_persona(body: PS.PersonaIn, user: User = Depends(current_user), d: Database = Depends(db)):
     rate(f"persona:{user.id}", 60, 3600)
@@ -659,8 +669,10 @@ async def generate_avatar(body: PS.AvatarIn, user: User = Depends(current_user),
 # stories & characters (owner only)
 # ---------------------------------------------------------------------------
 @app.get("/v1/stories")
-async def stories(user: User = Depends(current_user), d: Database = Depends(db)):
-    return {"stories": S.list_stories(d, user)}
+async def stories(scope: str = "mine", q: str = "", user: User = Depends(current_user), d: Database = Depends(db)):
+    if scope not in ("mine", "public", "all"):
+        raise ApiError(400, "bad_scope", "Неизвестный раздел.")
+    return {"stories": S.list_stories(d, user, scope, q[:100])}
 
 
 @app.post("/v1/stories", status_code=201)
@@ -685,7 +697,19 @@ async def demo_story(user: User = Depends(current_user), d: Database = Depends(d
 
 @app.get("/v1/stories/{sid}")
 async def get_story(sid: str, user: User = Depends(current_user), d: Database = Depends(db)):
-    return {"story": S.story_dict(d, S.story_row(d, user, sid))}
+    return {"story": S.story_dict(d, S.visible_story(d, user, sid), user=user)}
+
+
+@app.patch("/v1/stories/{sid}/visibility")
+async def story_visibility(sid: str, body: S.VisibilityIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    return {"story": S.set_visibility(d, user, sid, body.visibility)}
+
+
+@app.get("/v1/stories/{sid}/images/{iid}")
+async def story_image(sid: str, iid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    if not S.story_image_allowed(d, user, sid, iid):
+        raise not_found("Изображение не найдено")
+    return _image_response(iid)
 
 
 @app.put("/v1/stories/{sid}")
@@ -844,6 +868,69 @@ async def photo(room_id: str, body: R.PhotoIn, user: User = Depends(current_user
 @app.get("/v1/rooms/{room_id}/last-prompt")
 async def last_prompt(room_id: str, user: User = Depends(current_user), d: Database = Depends(db)):
     return R.last_prompt(d, user, room_id)
+
+
+# ---------------------------------------------------------------------------
+# voice-over of the characters' lines
+# ---------------------------------------------------------------------------
+class VoicePreviewIn(BaseModel):
+    voice: str = Field(default="", max_length=32)
+    manner: str = Field(default="", max_length=200)
+    timbre: str = Field(default="", max_length=200)
+    text: str = Field(default="", max_length=300)
+
+
+@app.get("/v1/voices")
+async def voices(user: User = Depends(current_user)):
+    return {"available": settings.tts_available, "voices": [{"id": v, "label": l} for v, l in V.VOICES],
+            "manners": V.MANNERS, "timbres": V.TIMBRES}
+
+
+def _audio(res) -> Response:
+    return Response(res.data, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.post("/v1/voice/preview")
+async def voice_preview(body: VoicePreviewIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"voicepre:{user.id}", 30, 3600, "Слишком много проб голоса за час. Попробуй позже.")
+    v, m, t = V.normalize(body.voice, body.manner, body.timbre)
+    text = body.text.strip() or "Привет. Так звучит мой голос — надеюсь, тебе нравится."
+    res = await V.synthesize(text, V.VoiceSpec(v, m, t))
+    usage.record(d, user.id, "voice", settings.tts_model, res)
+    return _audio(res)
+
+
+@app.post("/v1/rooms/{room_id}/messages/{message_id}/speech")
+async def message_speech(room_id: str, message_id: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    """The AI's line in the character's own voice (its spoken words; a line with only an action or the
+    narrator is read by the narrator's voice)."""
+    room = R.member_room(d, user, room_id)
+    m = d.one("SELECT * FROM messages WHERE room_id=? AND public_id=? AND hidden=0", (room["id"], message_id))
+    if not m or m["kind"] not in ("character", "narrator") or m["image_id"]:
+        raise not_found("Сообщение не найдено")
+    rate(f"voice:{user.id}", settings.rl_voice_per_hour, 3600, "Слишком много озвучек за час. Попробуй позже.")
+    spec, narrator, text = V.VoiceSpec(""), True, m["text"]
+    if m["kind"] == "character":
+        src = None
+        if m["character_id"]:
+            src = d.one("SELECT voice, voice_manner, voice_timbre FROM characters WHERE id=?", (m["character_id"],))
+        elif m["persona_id"]:
+            src = d.one("SELECT voice, voice_manner, voice_timbre FROM personas WHERE id=?", (m["persona_id"],))
+        else:
+            src = d.one("SELECT p.voice, p.voice_manner, p.voice_timbre FROM room_personas rp JOIN personas p "
+                        "ON p.id=rp.persona_id WHERE rp.room_id=? ORDER BY rp.position LIMIT 1", (room["id"],))
+        speech, acts = V.spoken_parts(m["text"])
+        if speech:
+            text, narrator = speech, False
+            if src:
+                spec = V.VoiceSpec(src["voice"], src["voice_manner"], src["voice_timbre"])
+        else:
+            text = acts
+    else:
+        text = " ".join(V.spoken_parts(m["text"])).strip()
+    res = await V.synthesize(text, spec, narrator=narrator)
+    usage.record(d, user.id, "voice", settings.tts_model, res)
+    return _audio(res)
 
 
 # ---------------------------------------------------------------------------

@@ -298,3 +298,22 @@ html.chat-open, html.chat-open body { overflow: hidden; height: 100%; overscroll
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* ---------- voice-over, stories ---------- */
+.speak { width: 28px; height: 28px; margin-left: 6px; border: 0; border-radius: 50%; background: none; color: rgba(255, 255, 255, .85);
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; padding: 0; }
+.speak:active { background: rgba(255, 255, 255, .1); transform: scale(.9); }
+.speak.on { color: var(--accent); }
+.speak.busy { opacity: .45; animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .9; } }
+.narrator .lbl2 { display: flex; align-items: center; }
+.m-name { display: flex; align-items: center; }
+select.field { appearance: none; -webkit-appearance: none; background-image: none; }
+.story-cover { border-radius: 22px; overflow: hidden; aspect-ratio: 16 / 9; background: var(--surface2); }
+.story-cover img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .25s; }
+.story-cover img.loaded { opacity: 1; }
+.char-card textarea { margin-top: 8px; }
+.char-card select { margin-top: 8px; }
+.voice-card .chips .chip { font-size: 13px; }
+select.field { color: var(--text); }
+select.field option { background: #1c1c1e; color: #fff; }

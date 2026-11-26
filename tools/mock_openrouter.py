@@ -59,6 +59,14 @@ class H(BaseHTTPRequestHandler):
             return self._json(401, {"error": {"message": "bad key"}})
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         n = next(COUNTER)
+        if self.path.endswith("/audio/speech"):  # voice-over: a short silent MP3
+            data = (bytes([0xFF, 0xFB, 0x90, 0x64]) + bytes(413)) * 20
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/mpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if body.get("modalities"):
             url = "data:image/png;base64," + base64.b64encode(png(f"mock image {n}")).decode()
             return self._json(200, {"choices": [{"message": {"role": "assistant", "content": "",

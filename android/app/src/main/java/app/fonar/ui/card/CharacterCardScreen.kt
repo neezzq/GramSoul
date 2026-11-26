@@ -127,6 +127,7 @@ fun CharacterCardScreen(nav: NavHostController, roomId: String, charId: String) 
                         age = d.age, appearance = d.appearance, habits = d.habits, personality = d.personality,
                         motivation = d.motivation, backstory = d.backstory, speech_style = d.speech_style,
                         relationships = d.relationships, example_lines = d.example_lines,
+                        voice = d.voice, voice_manner = d.voice_manner.trim(), voice_timbre = d.voice_timbre.trim(),
                     ),
                 )
                 nav.popBackStack()

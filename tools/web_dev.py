@@ -29,7 +29,7 @@ web = Starlette(routes=[
 
 
 # the same Content-Security-Policy as deploy/Caddyfile, so violations show up in tests
-CSP = ("default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; "
+CSP = ("default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; "
        "manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 
 

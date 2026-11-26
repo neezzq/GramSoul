@@ -76,6 +76,14 @@ fun CharacterFields(
         }
         Field("Примеры реплик", c.example_lines, { onChange(c.copy(example_lines = it)) }, minLines = 3,
             hint = "*крутит ракушку* Море сегодня дышит неровно.\nКаждая реплика — с новой строки")
+        if (c.role == "npc") {
+            // the AI speaks for this character: its voice for the voice-over
+            app.fonar.ui.components.VoiceFields(
+                c.voice, c.voice_manner, c.voice_timbre,
+                { onChange(c.copy(voice = it)) }, { onChange(c.copy(voice_manner = it)) }, { onChange(c.copy(voice_timbre = it)) },
+                tagPrefix = "char_voice",
+            )
+        }
         Spacer(Modifier.fillMaxWidth().padding(4.dp))
     }
 }

@@ -6,6 +6,9 @@ import app.fonar.ui.components.glow
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.StopCircle
+import androidx.compose.material.icons.automirrored.outlined.VolumeUp
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -136,6 +139,8 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
     var confirmLeave by remember { mutableStateOf(false) }
     var input by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }
     val listState = rememberLazyListState()
+    val playingId by app.fonar.ui.components.VoicePlayer.playing.collectAsStateWithLifecycle()
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { app.fonar.ui.components.VoicePlayer.stop() } }
     val room = s.room
     val me = vm.myUserId
     val context = LocalContext.current
@@ -204,6 +209,18 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                     Box {
                         IconButton(onClick = { menu = true }, modifier = Modifier.testTag("chat_menu")) { Icon(Icons.Outlined.MoreVert, "Ещё") }
                         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            if (room?.kind == "chat") {
+                                // the character of this chat: its page has «Редактировать», «Опубликовать» and the voice
+                                val pid = room.story.characters.firstOrNull()?.id
+                                if (pid != null) DropdownMenuItem(text = { Text("Персонаж: описание и голос") },
+                                    onClick = { menu = false; nav.navigate(Routes.persona(pid)) },
+                                    modifier = Modifier.exposeTags().testTag("menu_persona"))
+                            }
+                            if (room?.kind == "story" && room.my_role == "owner" && room.story.mine && room.story.id != null) {
+                                DropdownMenuItem(text = { Text("Редактировать историю") },
+                                    onClick = { menu = false; nav.navigate(Routes.editor(storyId = room.story.id)) },
+                                    modifier = Modifier.exposeTags().testTag("menu_edit_story"))
+                            }
                             if (room?.my_role == "owner") {
                                 DropdownMenuItem(text = { Text("Место сцены") }, onClick = { menu = false; showScene = true })
                             }
@@ -258,7 +275,9 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                             } else {
                                 MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard,
                                     onLongPress = if (canEdit(m)) ({ editing = m; showPhoto = false }) else null,
-                                    onOpenImage = { fullImage = it })
+                                    onOpenImage = { fullImage = it },
+                                    onSpeak = if (room.voice_available && m.kind != "player") ({ vm.speak(context, m) }) else null,
+                                    speaking = s.speakingId == m.id, playing = playingId == m.id)
                             }
                         }
                     }
@@ -397,6 +416,9 @@ private fun MessageItem(
     openCard: (String?) -> Unit,
     onLongPress: (() -> Unit)? = null,
     onOpenImage: (String) -> Unit = {},
+    onSpeak: (() -> Unit)? = null,
+    speaking: Boolean = false,
+    playing: Boolean = false,
 ) {
     // a chat line never reaches the opposite edge of the screen
     val maxW = (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp - 120).coerceAtLeast(160).dp
@@ -405,7 +427,10 @@ private fun MessageItem(
             m.text, color = Fonar.Muted, style = MaterialTheme.typography.bodySmall.copy(fontStyle = FontStyle.Italic),
             textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
         )
-        "narrator" -> NarratorBlock(m.text, m.edited, onLongPress)
+        "narrator" -> Box {
+            NarratorBlock(m.text, m.edited, onLongPress)
+            if (onSpeak != null) SpeakButton(onSpeak, speaking, playing, Modifier.align(Alignment.TopEnd))
+        }
         "character" -> {
             val c = characterById(room, m.character_id)
             val url = c?.avatar_image_id?.let { imageUrl(roomId, it) }
@@ -413,9 +438,12 @@ private fun MessageItem(
                 Avatar(m.speaker_name, url, 40.dp, onClick = { openCard(c?.id) }, modifier = Modifier.testTag("avatar_${m.speaker_name}"))
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f, fill = false).widthIn(max = maxW), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(m.speaker_name, color = Fonar.Lamp, fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.clickable { openCard(c?.id) }.padding(bottom = 1.dp).testTag("name_${m.speaker_name}"))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(m.speaker_name, color = Fonar.Lamp, fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.clickable { openCard(c?.id) }.padding(bottom = 1.dp).testTag("name_${m.speaker_name}"))
+                        if (onSpeak != null) SpeakButton(onSpeak, speaking, playing)
+                    }
                     CharacterParts(m.text, onLongPress)
                     if (m.edited) Text("изменено", style = MaterialTheme.typography.labelSmall, color = Fonar.Faint,
                         modifier = Modifier.padding(start = 4.dp))
@@ -458,6 +486,21 @@ private fun MessageItem(
                 }
             }
         }
+    }
+}
+
+/** ▶ voice-over of an AI line; a spinner while it is fetched, ■ while it plays. */
+@Composable
+private fun SpeakButton(onSpeak: () -> Unit, busy: Boolean, playing: Boolean, modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(30.dp).clip(CircleShape).clickable(enabled = !busy, onClickLabel = "Озвучить", onClick = onSpeak)
+            .testTag("speak_button"),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (busy) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = androidx.compose.ui.graphics.Color.White)
+        else Icon(if (playing) Icons.Outlined.StopCircle else Icons.AutoMirrored.Outlined.VolumeUp,
+            if (playing) "Остановить озвучку" else "Озвучить", tint = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.size(18.dp))
     }
 }
 

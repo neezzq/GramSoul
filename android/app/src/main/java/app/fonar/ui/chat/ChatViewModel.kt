@@ -40,6 +40,8 @@ data class ChatState(
     val suggestBusy: Boolean = false,
     /** Own photos being sent right now. */
     val uploading: Int = 0,
+    /** The line whose voice-over is being fetched. */
+    val speakingId: String? = null,
 )
 
 class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
@@ -178,6 +180,25 @@ class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
     fun setAiMode(mode: String) = action {
         g.api.setAiMode(roomId, mode)
         _state.update { s -> s.copy(room = s.room?.copy(ai_mode = mode)) }
+    }
+
+    /** Plays an AI line in the character's voice (the server caches it, a replay costs nothing). */
+    fun speak(context: android.content.Context, m: MessageDto) {
+        if (_state.value.speakingId != null) return
+        if (app.fonar.ui.components.VoicePlayer.playing.value == m.id) { app.fonar.ui.components.VoicePlayer.stop(); return }
+        _state.update { it.copy(speakingId = m.id) }
+        viewModelScope.launch {
+            try {
+                val audio = g.api.messageSpeech(roomId, m.id)
+                app.fonar.ui.components.VoicePlayer.play(context.applicationContext, m.id, audio)
+            } catch (e: ApiException) {
+                _state.update { it.copy(toast = e.message) }
+            } catch (e: NetworkException) {
+                _state.update { it.copy(toast = "Нет связи с сервером") }
+            } finally {
+                _state.update { it.copy(speakingId = null) }
+            }
+        }
     }
 
     fun requestPhoto(prompt: String) = action { id ->

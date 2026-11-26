@@ -278,6 +278,20 @@ MIGRATIONS = [
     # per-chat picture settings: the style of scene pictures and a fixed description of the scenes
     ("rooms", "image_style", "ALTER TABLE rooms ADD COLUMN image_style TEXT NOT NULL DEFAULT 'aesthetic'"),
     ("rooms", "image_notes", "ALTER TABLE rooms ADD COLUMN image_notes TEXT NOT NULL DEFAULT ''"),
+    # the style a picture was drawn in: the previous frame is a reference only for the same style
+    ("image_jobs", "style", "ALTER TABLE image_jobs ADD COLUMN style TEXT"),
+    # how characters address the player: '' | male | female
+    ("users", "gender", "ALTER TABLE users ADD COLUMN gender TEXT NOT NULL DEFAULT ''"),
+    # stories can be published; others play their own copy (source_id = the original)
+    ("stories", "visibility", "ALTER TABLE stories ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'"),
+    ("stories", "source_id", "ALTER TABLE stories ADD COLUMN source_id INTEGER"),
+    # voice-over: a voice id, a manner of speaking and a timbre, for characters and personas
+    ("personas", "voice", "ALTER TABLE personas ADD COLUMN voice TEXT NOT NULL DEFAULT ''"),
+    ("personas", "voice_manner", "ALTER TABLE personas ADD COLUMN voice_manner TEXT NOT NULL DEFAULT ''"),
+    ("personas", "voice_timbre", "ALTER TABLE personas ADD COLUMN voice_timbre TEXT NOT NULL DEFAULT ''"),
+    ("characters", "voice", "ALTER TABLE characters ADD COLUMN voice TEXT NOT NULL DEFAULT ''"),
+    ("characters", "voice_manner", "ALTER TABLE characters ADD COLUMN voice_manner TEXT NOT NULL DEFAULT ''"),
+    ("characters", "voice_timbre", "ALTER TABLE characters ADD COLUMN voice_timbre TEXT NOT NULL DEFAULT ''"),
 ]
 
 

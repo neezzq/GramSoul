@@ -107,6 +107,23 @@ class Api(
         }
     }
 
+    /** Raw bytes (audio); errors are turned into ApiException like JSON calls. */
+    private suspend fun bytes(req: Request): ByteArray {
+        val run: suspend () -> ByteArray = {
+            val resp = http.newCall(req).await()
+            resp.use { r ->
+                val body = withContext(Dispatchers.IO) { r.body?.bytes() ?: ByteArray(0) }
+                if (!r.isSuccessful) {
+                    val detail = runCatching { json.decodeFromString(ApiErrorBody.serializer(), body.decodeToString()).detail }.getOrNull()
+                    if (r.code == 401 && tokenProvider() != null) _unauthorized.tryEmit(Unit)
+                    throw ApiException(r.code, detail?.code ?: "http_${r.code}", detail?.message ?: "Ошибка ${r.code}")
+                }
+                body
+            }
+        }
+        return resultDispatcher?.let { withContext(it) { run() } } ?: run()
+    }
+
     private inline fun <reified B> jsonBody(body: B) =
         json.encodeToString(serializer<B>(), body).toRequestBody("application/json".toMediaType())
 
@@ -144,6 +161,7 @@ class Api(
     suspend fun logout(): OkRes = postEmpty("/v1/logout")
     suspend fun setAbout(about: String): MeRes = patch("/v1/me", AboutReq(about))
     suspend fun setNick(nick: String): MeRes = patch("/v1/me", NickReq(nick))
+    suspend fun setGender(gender: String): MeRes = patch("/v1/me", GenderReq(gender))
     suspend fun setAvatar(imageId: String?): MeRes = patch("/v1/me", AvatarReq(imageId ?: ""))
     suspend fun transferCode(): TransferCodeRes = postEmpty("/v1/me/transfer-code")
     suspend fun loginWithTransferCode(nick: String, code: String): LoginRes =
@@ -159,6 +177,10 @@ class Api(
     suspend fun inboxWait(since: Long, wait: Int = 25): InboxRes = get("/v1/inbox/wait?since=$since&wait=$wait", longPoll)
 
     suspend fun stories(): StoriesRes = get("/v1/stories")
+    suspend fun publicStories(q: String = ""): StoriesRes = get("/v1/stories?scope=public&q=${q(q)}")
+    suspend fun setStoryVisibility(id: String, visibility: String): StoryRes =
+        patch("/v1/stories/$id/visibility", VisibilityReq(visibility))
+    fun storyImageUrl(storyId: String, imageId: String) = url("/v1/stories/$storyId/images/$imageId")
     suspend fun story(id: String): StoryRes = get("/v1/stories/$id")
     suspend fun createStory(s: StoryReq): StoryRes = post("/v1/stories", s)
     suspend fun updateStory(id: String, s: StoryReq): StoryRes = put("/v1/stories/$id", s)
@@ -197,6 +219,15 @@ class Api(
     suspend fun createPersona(p: PersonaReq): PersonaRes = post("/v1/personas", p)
     suspend fun updatePersona(id: String, p: PersonaReq): PersonaRes = put("/v1/personas/$id", p)
     suspend fun deletePersona(id: String): OkRes = delete("/v1/personas/$id")
+    suspend fun setPersonaVisibility(id: String, visibility: String): PersonaRes =
+        patch("/v1/personas/$id/visibility", VisibilityReq(visibility))
+    suspend fun voices(): VoicesRes = get("/v1/voices")
+    /** MP3 bytes of a voice sample for the editor. */
+    suspend fun voicePreview(voice: String, manner: String, timbre: String): ByteArray =
+        bytes(Request.Builder().url(url("/v1/voice/preview")).post(jsonBody(VoicePreviewReq(voice, manner, timbre))).build())
+    /** MP3 bytes of an AI line in the character's voice. */
+    suspend fun messageSpeech(roomId: String, messageId: String): ByteArray =
+        bytes(Request.Builder().url(url("/v1/rooms/$roomId/messages/$messageId/speech")).post(ByteArray(0).toRequestBody(null)).build())
     suspend fun fillPersona(idea: String): FillRes = post("/v1/personas/fill", FillReq(idea))
     suspend fun avatarStyles(): AvatarStylesRes = get("/v1/avatar-styles")
     suspend fun generateAvatar(name: String, description: String, style: String): AvatarGenRes =
@@ -230,16 +261,40 @@ class Api(
         return exec(Request.Builder().url(url("/v1/rooms/$roomId/upload")).post(body).build(), PostMessageRes.serializer())
     }
 
+    /** Decodes any picture the gallery gives (JPEG, PNG, WebP, HEIC…), applies its rotation, scales it down
+     *  to maxSide and re-encodes it as JPEG. Throws a clear ApiException when the file cannot be read. */
     private fun prepareJpeg(context: Context, uri: Uri, maxSide: Int): ByteArray {
+        val bmp = decodeScaled(context, uri, maxSide)
+            ?: throw ApiException(0, "bad_image", "Не удалось прочитать картинку. Выбери фото в формате JPG, PNG или HEIC.")
+        return ByteArrayOutputStream().use { out ->
+            bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            out.toByteArray()
+        }
+    }
+
+    private fun decodeScaled(context: Context, uri: Uri, maxSide: Int): Bitmap? {
         val cr = context.contentResolver
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            // ImageDecoder reads HEIC/AVIF too and applies the EXIF rotation itself
+            val viaDecoder = runCatching {
+                android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(cr, uri)) { decoder, info, _ ->
+                    val w = info.size.width
+                    val h = info.size.height
+                    val scale = minOf(1f, maxSide.toFloat() / maxOf(w, h).coerceAtLeast(1))
+                    if (scale < 1f) decoder.setTargetSize((w * scale).toInt().coerceAtLeast(1), (h * scale).toInt().coerceAtLeast(1))
+                    decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                }
+            }.getOrNull()
+            if (viaDecoder != null) return viaDecoder
+        }
+        // older Android: BitmapFactory with sampling + EXIF rotation
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-            ?: throw ApiException(0, "bad_image", "Не удалось открыть картинку")
+        (cr.openInputStream(uri) ?: return null).use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (bounds.outWidth / (sample * 2) >= maxSide || bounds.outHeight / (sample * 2) >= maxSide) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-        var bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-            ?: throw ApiException(0, "bad_image", "Не удалось прочитать картинку")
+        var bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) } ?: return null
         val rotation = runCatching {
             cr.openInputStream(uri)?.use {
                 when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
@@ -255,9 +310,6 @@ class Api(
             val m = Matrix().apply { postScale(scale, scale); postRotate(rotation) }
             bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
         }
-        return ByteArrayOutputStream().use { out ->
-            bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
-            out.toByteArray()
-        }
+        return bmp
     }
 }

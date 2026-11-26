@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Search
@@ -282,8 +283,37 @@ private fun StoriesTab(
     onOpenInvites: () -> Unit,
 ) {
     val graph = LocalContext.current.graph
+    var scope by rememberSaveable { mutableStateOf(0) }  // 0 = mine, 1 = published by others
+    LaunchedEffect(scope) { if (scope == 1) vm.loadPublicStories() }
     LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.testTag("stories_list")) {
+        item {
+            app.fonar.ui.components.Segmented(listOf("Мои истории", "Общие"), scope, { scope = it },
+                tags = listOf("stories_mine", "stories_public"))
+        }
+        if (scope == 1) {
+            val list = state.publicStories
+            when {
+                list == null -> item { CenterLoading(Modifier.height(120.dp)) }
+                list.isEmpty() -> item {
+                    Text("Пока никто не опубликовал историю. Опубликуй свою — в меню ⋯ на её карточке.",
+                        color = Fonar.Muted, modifier = Modifier.testTag("public_stories_empty"))
+                }
+                else -> items(list, key = { "pub" + it.id }) { st ->
+                    Box(Modifier.animateItem()) {
+                        StoryCard(
+                            st,
+                            coverUrl = st.cover_image_id?.let { graph.api.storyImageUrl(st.id!!, it) },
+                            avatarUrl = st.avatar_image_id?.let { graph.api.storyImageUrl(st.id!!, it) },
+                            onPlay = { vm.startRoom(st.id!!, null) { room -> nav.openChat(room.id) } },
+                            onPlayWithFriend = { onPlayWithFriend(st) },
+                            onEdit = null, onDelete = null, onToggleVisibility = null,
+                        )
+                    }
+                }
+            }
+            return@LazyColumn
+        }
         if (state.offline) item { Banner("Нет связи с сервером — показываю, что есть", Fonar.Error) }
         if (state.invites.isNotEmpty()) item {
             Banner("Тебя зовут в сцену: ${state.invites.size}", Fonar.Sea) {
@@ -330,6 +360,7 @@ private fun StoriesTab(
                 onPlayWithFriend = { onPlayWithFriend(s) },
                 onEdit = { nav.navigate(Routes.editor(storyId = s.id)) },
                 onDelete = { vm.deleteStory(s.id!!) },
+                onToggleVisibility = { vm.setStoryVisibility(s.id!!, s.visibility != "public") },
             )
             }
         }
@@ -343,8 +374,9 @@ private fun StoryCard(
     avatarUrl: String?,
     onPlay: () -> Unit,
     onPlayWithFriend: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    onEdit: (() -> Unit)?,
+    onDelete: (() -> Unit)?,
+    onToggleVisibility: (() -> Unit)?,
 ) {
     var menu by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -373,12 +405,20 @@ private fun StoryCard(
                     }
                 }
                 if (s.is_demo) Pill("демо", Fonar.Lamp)
-                Box {
-                    IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Ещё") }
+                if (s.mine && s.visibility == "public") Pill("публичная", Fonar.Sea, Modifier.testTag("story_public_pill"))
+                if (!s.mine) s.author?.let { Pill(it.nick, Fonar.Muted) }
+                if (onEdit != null || onDelete != null || onToggleVisibility != null) Box {
+                    IconButton(onClick = { menu = true }, modifier = Modifier.testTag("story_menu_${s.title}")) { Icon(Icons.Outlined.MoreVert, "Ещё") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(text = { Text("Изменить") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) },
+                        if (onEdit != null) DropdownMenuItem(text = { Text("Изменить") }, leadingIcon = { Icon(Icons.Outlined.Edit, null) },
                             onClick = { menu = false; onEdit() })
-                        DropdownMenuItem(text = { Text("Удалить") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                        if (onToggleVisibility != null) DropdownMenuItem(
+                            text = { Text(if (s.visibility == "public") "Сделать личной" else "Опубликовать для всех") },
+                            leadingIcon = { Icon(Icons.Outlined.Public, null) },
+                            onClick = { menu = false; onToggleVisibility() },
+                            modifier = Modifier.exposeTags().testTag("story_publish"),
+                        )
+                        if (onDelete != null) DropdownMenuItem(text = { Text("Удалить") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) },
                             onClick = { menu = false; confirmDelete = true })
                     }
                 }
@@ -402,7 +442,7 @@ private fun StoryCard(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Удалить историю?") },
             text = { Text("Все сцены этой истории тоже удалятся у обоих игроков.") },
-            confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Удалить", color = Fonar.Error) } },
+            confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete?.invoke() }) { Text("Удалить", color = Fonar.Error) } },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Отмена") } },
             containerColor = Fonar.Surface,
         )

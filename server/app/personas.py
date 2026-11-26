@@ -36,6 +36,14 @@ class PersonaIn(BaseModel):
     visibility: str = Field(default="private", pattern="^(public|private)$")
     status: str = Field(default="draft", pattern="^(draft|published)$")
     avatar_image_id: str | None = Field(default=None, max_length=64)
+    # voice-over (None = keep, for older app versions)
+    voice: str | None = Field(default=None, max_length=32)
+    voice_manner: str | None = Field(default=None, max_length=200)
+    voice_timbre: str | None = Field(default=None, max_length=200)
+
+
+class VisibilityIn(BaseModel):
+    visibility: str = Field(pattern="^(public|private)$")
 
 
 class FillIn(BaseModel):
@@ -97,6 +105,7 @@ def persona_dict(d: Database, row, user: User) -> dict:
         "description": row["description"], "first_message": row["first_message"],
         "tags": json.loads(row["tags"] or "[]"), "visibility": row["visibility"], "status": row["status"],
         "is_demo": bool(row["is_demo"]), "author": author, "mine": mine, "updated_at": row["updated_at"],
+        "voice": row["voice"] or "", "voice_manner": row["voice_manner"] or "", "voice_timbre": row["voice_timbre"] or "",
     }
     if mine:  # what the model gets besides the card — only the author sees it
         out["backstory"] = row["backstory"]
@@ -134,6 +143,7 @@ def create(d: Database, user: User, body: PersonaIn) -> dict:
         (new_id(), user.id, v["name"], iid, v["first_message"], v["description"], v["backstory"], v["personality"],
          v["tags"], v["visibility"], v["status"], ts, ts),
     )
+    _set_voice(d, cur.lastrowid, body, None)
     return {"persona": persona_dict(d, d.one("SELECT * FROM personas WHERE id=?", (cur.lastrowid,)), user)}
 
 
@@ -147,6 +157,26 @@ def update(d: Database, user: User, pid: str, body: PersonaIn) -> dict:
         (v["name"], iid, v["first_message"], v["description"], v["backstory"], v["personality"], v["tags"],
          v["visibility"], v["status"], now_ms(), row["id"]),
     )
+    _set_voice(d, row["id"], body, row)
+    return {"persona": persona_dict(d, d.one("SELECT * FROM personas WHERE id=?", (row["id"],)), user)}
+
+
+def _set_voice(d: Database, persona_id: int, body: PersonaIn, old) -> None:
+    from .voice import normalize
+    cur = (old["voice"], old["voice_manner"], old["voice_timbre"]) if old else ("", "", "")
+    v = normalize(body.voice if body.voice is not None else cur[0],
+                  body.voice_manner if body.voice_manner is not None else cur[1],
+                  body.voice_timbre if body.voice_timbre is not None else cur[2])
+    d.run("UPDATE personas SET voice=?, voice_manner=?, voice_timbre=? WHERE id=?", (*v, persona_id))
+
+
+def set_visibility(d: Database, user: User, pid: str, visibility: str) -> dict:
+    """Publish or hide a character at any time, also when chats with it already exist."""
+    row = _own(d, user, pid)
+    if visibility == "public" and (not row["name"].strip() or not row["first_message"].strip()):
+        raise ApiError(400, "incomplete", "Чтобы опубликовать, заполни имя и первое сообщение.")
+    status = "published" if visibility == "public" else row["status"]
+    d.run("UPDATE personas SET visibility=?, status=?, updated_at=? WHERE id=?", (visibility, status, now_ms(), row["id"]))
     return {"persona": persona_dict(d, d.one("SELECT * FROM personas WHERE id=?", (row["id"],)), user)}
 
 
@@ -193,8 +223,9 @@ FILL_SYSTEM = (
     '"description" — описание для карточки, 2–4 предложения: кто это, внешность, чем интересен;\n'
     '"personality" — характер: поведение, привычки, манера речи (3–5 предложений);\n'
     '"backstory" — предыстория (3–5 предложений);\n'
-    '"first_message" — первое сообщение: вступительная сцена от второго лица («Ты входишь…»), '
-    "действия и обстановка в *звёздочках*, реплика персонажа с тире; 3–6 предложений, заканчивается репликой персонажа;\n"
+    '"first_message" — первое сообщение: вступительная сцена; действия и обстановка в *звёздочках* от лица '
+    "рассказчика, в третьем лице (*Он поднимает взгляд…*), реплика персонажа с тире; 3–6 предложений, "
+    "заканчивается репликой персонажа;\n"
     '"tags" — 3–5 тегов строчными буквами.\n'
     "Персонаж — взрослый (18+). Пиши на языке идеи пользователя (по умолчанию по-русски)."
 )

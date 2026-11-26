@@ -157,9 +157,18 @@ fun PersonasTab(nav: NavHostController) {
                 modifier = Modifier.fillMaxSize().testTag("personas_grid"),
             ) {
                 item(span = { GridItemSpan(2) }) {
-                    Button(onClick = { nav.navigate(Routes.personaEdit(null)) }, modifier = Modifier.fillMaxWidth().glow().testTag("create_persona")) {
-                        Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
-                        Text("  Создать персонажа")
+                    // create a single character, or a whole story (world, several characters, start scene)
+                    androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(onClick = { nav.navigate(Routes.personaEdit(null)) },
+                            modifier = Modifier.weight(1f).glow().testTag("create_persona")) {
+                            Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                            Text(" Персонажа")
+                        }
+                        androidx.compose.material3.OutlinedButton(onClick = { nav.navigate(Routes.editor()) },
+                            modifier = Modifier.weight(1f).testTag("create_story")) {
+                            Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                            Text(" Историю")
+                        }
                     }
                 }
                 if (s.items.isEmpty()) item(span = { GridItemSpan(2) }) {

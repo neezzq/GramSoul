@@ -91,10 +91,27 @@ class Settings:
     rl_messages_per_min: int = field(default_factory=lambda: _int("RL_MESSAGES_PER_MIN", 30))
     rl_uploads_per_hour: int = field(default_factory=lambda: _int("RL_UPLOADS_PER_HOUR", 60))
     sync_wait_max_s: int = 25
+    # voice-over of the characters' lines: OpenRouter text-to-speech (OpenAI Audio Speech format).
+    # TTS_API_KEY is optional: a separate OpenRouter key with its own spending limit; else OPENROUTER_API_KEY.
+    tts_api_key: str = field(default_factory=lambda: _env("TTS_API_KEY", "").strip())
+    tts_base_url: str = field(default_factory=lambda: _env("TTS_BASE_URL", ""))
+    tts_model: str = field(default_factory=lambda: _env("TTS_MODEL", "openai/gpt-4o-mini-tts-2025-12-15"))
+    tts_default_voice: str = field(default_factory=lambda: _env("TTS_DEFAULT_VOICE", "alloy"))
+    tts_narrator_voice: str = field(default_factory=lambda: _env("TTS_NARRATOR_VOICE", "sage"))
+    tts_usd_per_mchar: float = field(default_factory=lambda: _float("TTS_USD_PER_MCHAR", 0.6))  # for the admin estimate
+    rl_voice_per_hour: int = field(default_factory=lambda: _int("RL_VOICE_PER_HOUR", 120))
 
     @property
     def cloud_available(self) -> bool:
         return bool(self.openrouter_api_key) or self.llm_backend == "fake"
+
+    @property
+    def tts_key(self) -> str:
+        return self.tts_api_key or self.openrouter_api_key
+
+    @property
+    def tts_available(self) -> bool:
+        return bool(self.tts_key) or self.llm_backend == "fake"
 
     def new_room_ai_mode(self) -> str:
         if not self.local_ai:

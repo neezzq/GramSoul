@@ -5,7 +5,7 @@ from .db import Database, now_ms
 
 
 def record(db: Database, user_id: int | None, kind: str, model: str | None, result) -> None:
-    """kind: text | avatar | photo. result: llm.LLMResult or llm.ImageResult (anything with the token fields)."""
+    """kind: text | avatar | photo | voice (prompt_tokens = characters). result: llm.LLMResult or llm.ImageResult (anything with the token fields)."""
     if result is None:
         return
     pt = getattr(result, "prompt_tokens", None) or 0

@@ -171,6 +171,22 @@ fun ProfileScreen(nav: NavHostController) {
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
+            // characters address the player by this gender
+            Text("Пол — так к тебе будут обращаться персонажи", color = Fonar.Muted, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp))
+            val genders = listOf("" to "Не указан", "male" to "Мужской", "female" to "Женский")
+            app.fonar.ui.components.Segmented(
+                options = genders.map { it.second },
+                selected = genders.indexOfFirst { it.first == (me?.gender ?: "") }.coerceAtLeast(0),
+                onSelect = { i ->
+                    val g = genders[i].first
+                    if (g != (me?.gender ?: "")) scope.launch {
+                        try { me = graph.api.setGender(g).user } catch (e: Exception) { message = errText(e) }
+                    }
+                },
+                tags = listOf("gender_none", "gender_male", "gender_female"),
+            )
             Spacer(Modifier.height(20.dp))
             OutlinedTextField(
                 value = about,

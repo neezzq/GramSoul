@@ -12,6 +12,8 @@ data class UserDto(
     val last_seen_at: Long? = null,
     /** Only in the own profile: false = an old account that must set a password first. */
     val has_password: Boolean? = null,
+    /** Only in the own profile: '' | male | female — how characters address the player. */
+    val gender: String? = null,
 )
 
 @Serializable
@@ -113,6 +115,10 @@ data class CharacterDto(
     val relationships: Map<String, String> = emptyMap(),
     val example_lines: String = "",
     val version: Int = 0,
+    /** Voice-over: a voice id (see /v1/voices), a manner of speaking and a timbre. */
+    val voice: String = "",
+    val voice_manner: String = "",
+    val voice_timbre: String = "",
 )
 
 @Serializable
@@ -134,6 +140,10 @@ data class StoryDto(
     val start_messages: List<StartMessageDto> = emptyList(),
     val character_names: List<String> = emptyList(),
     val avatar_image_id: String? = null,
+    /** public stories are in the catalog; others play their own copy */
+    val visibility: String = "private",
+    val mine: Boolean = true,
+    val author: PersonaAuthor? = null,
 )
 
 @Serializable
@@ -161,6 +171,8 @@ data class StoryReq(
     val cover_image_id: String?,
     val characters: List<CharacterDto>,
     val start_messages: List<StartMessageDto>,
+    /** public | private; null keeps the current value. */
+    val visibility: String? = null,
 )
 
 @Serializable
@@ -177,6 +189,9 @@ data class CharacterPatch(
     val speech_style: String? = null,
     val relationships: Map<String, String>? = null,
     val example_lines: String? = null,
+    val voice: String? = null,
+    val voice_manner: String? = null,
+    val voice_timbre: String? = null,
 )
 
 @Serializable
@@ -215,6 +230,7 @@ data class RoomDto(
     /** Pictures of this chat: style id and the player's fixed description of the scenes. */
     val image_style: String = "aesthetic",
     val image_notes: String = "",
+    val voice_available: Boolean = false,
     val images_available: Boolean = false,
     val ai_models: Map<String, String> = emptyMap(),
 )
@@ -372,6 +388,9 @@ data class PersonaDto(
     val personality: String? = null,
     val updated_at: Long = 0,
     val chats: List<PersonaChatRef> = emptyList(),
+    val voice: String = "",
+    val voice_manner: String = "",
+    val voice_timbre: String = "",
 )
 
 @Serializable
@@ -397,6 +416,9 @@ data class PersonaReq(
     val visibility: String,
     val status: String,
     val avatar_image_id: String? = null,
+    val voice: String? = null,
+    val voice_manner: String? = null,
+    val voice_timbre: String? = null,
 )
 
 @Serializable
@@ -432,3 +454,25 @@ data class AvatarGenReq(val name: String, val description: String, val style: St
 
 @Serializable
 data class AvatarGenRes(val image_id: String, val width: Int = 0, val height: Int = 0, val style: String = "")
+
+
+// ---------------------------------------------------------------- publishing, gender, voice-over
+@Serializable
+data class VisibilityReq(val visibility: String)
+
+@Serializable
+data class GenderReq(val gender: String)
+
+@Serializable
+data class VoiceOption(val id: String, val label: String)
+
+@Serializable
+data class VoicesRes(
+    val available: Boolean = false,
+    val voices: List<VoiceOption> = emptyList(),
+    val manners: List<String> = emptyList(),
+    val timbres: List<String> = emptyList(),
+)
+
+@Serializable
+data class VoicePreviewReq(val voice: String, val manner: String, val timbre: String, val text: String = "")

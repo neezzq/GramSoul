@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.3';
+const WEB_VERSION = '1.4';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -64,6 +64,10 @@ const ICONS = {
   sparkle: 'M11 3l1.7 4.8L17.5 9.5l-4.8 1.7L11 16l-1.7-4.8L4.5 9.5l4.8-1.7zM18.5 14v5M16 16.5h5',
   image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 8.5h.01',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
+  speaker: 'M4 9h4l5-4v14l-5-4H4zM16.5 8.5a5 5 0 010 7M19 6a8.5 8.5 0 010 12',
+  stop: 'M7 7h10v10H7z',
+  play: 'M8 5v14l11-7z',
+  globe: 'M12 21a9 9 0 100-18 9 9 0 000 18zM3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9z',
   sliders: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4',
 };
 function icon(name, size = 24) {
@@ -174,7 +178,7 @@ function sessionLost() {
 }
 
 async function api(path, opts = {}) {
-  const { method = 'GET', body, form, signal } = opts;
+  const { method = 'GET', body, form, signal, raw } = opts;
   const headers = {};
   const token = store.token;
   if (token) headers.Authorization = 'Bearer ' + token;
@@ -188,6 +192,7 @@ async function api(path, opts = {}) {
     if (e.name === 'AbortError') throw e;
     throw new ApiError(0, 'network', 'Нет связи с сервером. Проверь интернет.');
   }
+  if (raw && r.ok) return r.blob();
   const text = await r.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch (_) { data = null; }
@@ -456,6 +461,100 @@ function personaCard(p) {
   return card;
 }
 
+// ------------------------------------------------------------------ voice-over
+// one <audio> for the whole app; it is «unlocked» inside the tap so iPhone lets it play after the download
+const PLAYER = { el: null, key: null };
+const SILENT_MP3 = 'data:audio/mpeg;base64,' + btoa(String.fromCharCode(0xFF, 0xFB, 0x90, 0x64) + '\0'.repeat(413));
+function voiceState() { document.dispatchEvent(new Event('voice-state')); }
+function audioEl() {
+  if (!PLAYER.el) {
+    PLAYER.el = new Audio();
+    PLAYER.el.addEventListener('ended', () => { PLAYER.key = null; voiceState(); });
+  }
+  return PLAYER.el;
+}
+function stopVoice() { if (PLAYER.el) PLAYER.el.pause(); PLAYER.key = null; voiceState(); }
+async function playVoice(key, path, body) {
+  const a = audioEl();
+  if (PLAYER.key === key || PLAYER.key === 'loading:' + key) { stopVoice(); return; }
+  try { a.src = SILENT_MP3; a.play().catch(() => {}); } catch (_) {}
+  PLAYER.key = 'loading:' + key;
+  voiceState();
+  try {
+    const blob = await api(path, { method: 'POST', body, raw: true });
+    if (PLAYER.key !== 'loading:' + key) return;  // stopped meanwhile
+    a.src = URL.createObjectURL(blob);
+    PLAYER.key = key;
+    voiceState();
+    await a.play();
+  } catch (e) {
+    if (e && e.name === 'NotAllowedError') toast('Нажми ещё раз, чтобы послушать');
+    else if (e && e.name !== 'AbortError') toast(e.message || 'Не удалось воспроизвести озвучку');
+    PLAYER.key = null;
+    voiceState();
+  }
+}
+let VOICES = null;
+async function voiceOptions() {
+  if (!VOICES) {
+    try { VOICES = await api('/v1/voices'); } catch (_) { VOICES = { available: false, voices: [], manners: [], timbres: [] }; }
+  }
+  return VOICES;
+}
+/** Voice of a character for the voice-over: a voice, a manner of speaking and a timbre, and a sample. */
+function voiceFields(init, idPrefix) {
+  const sel = h('select', { class: 'field', id: idPrefix + '-voice' }, h('option', { value: '' }, 'Авто'));
+  const manner = h('input', { class: 'field', id: idPrefix + '-manner', maxlength: 200, placeholder: 'например: дерзко и насмешливо', value: init.voice_manner || '' });
+  const timbre = h('input', { class: 'field', id: idPrefix + '-timbre', maxlength: 200, placeholder: 'например: низкий, с хрипотцой', value: init.voice_timbre || '' });
+  const mChips = h('div', { class: 'chips', style: 'margin-top:6px' });
+  const tChips = h('div', { class: 'chips', style: 'margin-top:6px' });
+  const note = h('div', { class: 'hint' });
+  const key = 'preview-' + idPrefix;
+  const play = h('button', { class: 'btn ghost small', id: idPrefix + '-preview', type: 'button', style: 'margin-top:10px' }, icon('play', 18), 'Прослушать голос');
+  play.addEventListener('click', () => playVoice(key, '/v1/voice/preview',
+    { voice: sel.value, manner: manner.value.trim(), timbre: timbre.value.trim() }));
+  const onState = () => {
+    if (!document.body.contains(play)) { document.removeEventListener('voice-state', onState); return; }
+    play.lastChild.textContent = PLAYER.key === key ? 'Стоп' : PLAYER.key === 'loading:' + key ? 'Загружаю…' : 'Прослушать голос';
+  };
+  document.addEventListener('voice-state', onState);
+  voiceOptions().then((o) => {
+    for (const v of o.voices) sel.append(h('option', { value: v.id }, v.label));
+    sel.value = init.voice || '';
+    const chipsFor = (box, list, input) => box.replaceChildren(...list.map((t) => h('button', { type: 'button', class: 'chip', onclick: () => { input.value = t; } }, t)));
+    chipsFor(mChips, o.manners, manner);
+    chipsFor(tChips, o.timbres, timbre);
+    if (!o.available) { note.textContent = 'Озвучка пока не настроена на сервере.'; play.disabled = true; }
+  });
+  const el = h('div', { class: 'card voice-card', style: 'margin-top:14px' },
+    h('div', { style: 'font-weight:600' }, 'Голос для озвучки'),
+    h('label', { class: 'lbl' }, 'Голос'), sel,
+    h('label', { class: 'lbl' }, 'Манера речи'), manner, mChips,
+    h('label', { class: 'lbl' }, 'Тембр'), timbre, tChips, note, play);
+  return { el, value: () => ({ voice: sel.value, voice_manner: manner.value.trim(), voice_timbre: timbre.value.trim() }) };
+}
+
+function createSheet() {
+  const s = sheet('Что создать?',
+    h('button', { class: 'list-item', id: 'create-persona-item', onclick: () => { s.close(); location.hash = '#/persona-edit'; } }, icon('face'),
+      h('div', { class: 'grow' }, h('div', { class: 't' }, 'Персонажа'), h('div', { class: 's' }, 'Один герой для личного чата'))),
+    h('button', { class: 'list-item', id: 'create-story-item', onclick: () => { s.close(); location.hash = '#/story-edit'; } }, icon('book'),
+      h('div', { class: 'grow' }, h('div', { class: 't' }, 'Историю'), h('div', { class: 's' }, 'Мир, несколько персонажей, место и первая сцена — можно играть с другом'))));
+}
+
+function storyCover(st) {
+  const iid = st.cover_image_id || st.avatar_image_id;
+  return iid ? `/v1/stories/${st.id}/images/${iid}` : null;
+}
+function storyItem(st) {
+  return h('button', { class: 'list-item story-item', 'data-story': st.title, onclick: () => { location.hash = '#/story/' + st.id; } },
+    avatar(st.title, storyCover(st), 52),
+    h('div', { class: 'grow', style: 'min-width:0' },
+      h('div', { class: 't ellipsis' }, st.title),
+      h('div', { class: 's ellipsis' }, st.mine ? (st.visibility === 'public' ? 'Моя · публичная' : 'Моя · личная') : 'Автор: ' + ((st.author && st.author.nick) || '—')),
+      st.description ? h('div', { class: 's', style: 'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden' }, st.description) : null));
+}
+
 function screenCharacters(root) {
   const page = tabPage(root, 'characters', 'Персонажи', (store.me && store.me.nick) || '');
   let scope = sessionStorage.getItem('gs_scope') || 'all';
@@ -467,7 +566,7 @@ function screenCharacters(root) {
   const chips = h('div', { class: 'chips', style: 'margin-top:10px' });
   const drawChips = () => chips.replaceChildren(...[['all', 'Все'], ['mine', 'Мои'], ['drafts', 'Черновики']].map(([id, l]) =>
     h('button', { class: 'chip' + (scope === id ? ' on' : ''), onclick: () => { scope = id; sessionStorage.setItem('gs_scope', id); drawChips(); load(); } }, l)));
-  async function load() {
+  let load = async function () {
     const my = ++seq;
     try {
       const r = await api(`/v1/personas?q=${encodeURIComponent(q)}&scope=${scope}`);
@@ -477,12 +576,36 @@ function screenCharacters(root) {
     } catch (e) {
       if (my === seq) grid.replaceChildren(errorBox(e.message, load));
     }
-  }
+  };
   search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => { q = search.value.trim(); load(); }, 300); });
   drawChips();
-  page.append(search, chips,
-    h('button', { class: 'btn primary wide', id: 'create-persona', style: 'margin-top:12px', onclick: () => { location.hash = '#/persona-edit'; } }, icon('plus', 20), 'Создать персонажа'),
-    grid);
+  // personas | stories
+  let kind = sessionStorage.getItem('gs_kind') || 'personas';
+  const kindSeg = h('div', { class: 'seg', style: 'margin-bottom:12px' });
+  const storyBox = h('div', { id: 'stories' });
+  const drawKind = () => {
+    kindSeg.replaceChildren(...[['personas', 'Персонажи'], ['stories', 'Истории']].map(([k, l]) =>
+      h('button', { type: 'button', id: 'kind-' + k, class: kind === k ? 'on' : '', onclick: () => { kind = k; sessionStorage.setItem('gs_kind', k); drawKind(); load(); } }, l)));
+    search.placeholder = kind === 'stories' ? 'Название истории' : 'Имя или #тег';
+    chips.classList.toggle('hidden', kind === 'stories');
+    grid.classList.toggle('hidden', kind === 'stories');
+    storyBox.classList.toggle('hidden', kind !== 'stories');
+  };
+  const personasLoad = load;
+  async function loadStories() {
+    const my = ++seq;
+    try {
+      const r = await api(`/v1/stories?scope=all&q=${encodeURIComponent(q)}`);
+      if (my !== seq) return;
+      fill(storyBox, r.stories.length ? r.stories.map(storyItem)
+        : h('div', { class: 'muted' }, q ? 'Ничего не нашли.' : 'Историй пока нет — создай свою или дождись, пока друзья опубликуют.'));
+    } catch (e) { if (my === seq) fill(storyBox, errorBox(e.message, loadStories)); }
+  }
+  load = () => (kind === 'stories' ? loadStories() : personasLoad());
+  drawKind();
+  page.append(kindSeg, search, chips,
+    h('button', { class: 'btn primary wide', id: 'create-persona', style: 'margin-top:12px', onclick: createSheet }, icon('plus', 20), 'Создать'),
+    grid, storyBox);
   load();
 }
 
@@ -519,10 +642,21 @@ async function screenPersona(root, id) {
     p.mine ? h('span', { class: 'pill lilac' }, p.visibility === 'public' ? 'Публичный' : 'Личный') : null,
     h('span', { class: 'pill grey' }, '18+'),
     (p.tags || []).map((t) => h('span', { class: 'pill' }, '#' + t)));
+  // publish or hide at any time — also when chats with this character already exist
+  const pubBtn = p.mine ? h('button', { class: 'btn ghost wide', id: 'persona-publish-toggle', style: 'margin-top:10px' },
+    icon('globe', 20), p.visibility === 'public' && p.status === 'published' ? 'Сделать личным' : 'Опубликовать для всех') : null;
+  if (pubBtn) pubBtn.addEventListener('click', async () => {
+    const pub = p.visibility === 'public' && p.status === 'published';
+    try {
+      p = (await api(`/v1/personas/${id}/visibility`, { method: 'PATCH', body: { visibility: pub ? 'private' : 'public' } })).persona;
+      toast(pub ? 'Персонаж снова личный' : 'Персонаж опубликован');
+      render();
+    } catch (e) { toast(e.message); }
+  });
   put(page, portrait,
     h('div', { class: 'center', style: 'font-size:24px;font-weight:700' }, name),
     h('div', { class: 'center muted' }, p.is_demo ? 'Персонаж GramSoul' : p.mine ? 'Твой персонаж' : 'Автор: ' + ((p.author && p.author.nick) || '—')),
-    tags, actions,
+    tags, actions, pubBtn,
     p.description ? [h('div', { class: 'section' }, 'Описание'), h('div', { style: 'white-space:pre-wrap' }, p.description)] : null,
     p.first_message ? [h('div', { class: 'section' }, 'Первое сообщение'), h('div', { class: 'bubble char', style: 'user-select:text' }, richText(p.first_message, true))] : null,
     p.mine && p.personality ? [h('div', { class: 'section' }, 'Характер · видно только тебе'), h('div', { class: 'muted', style: 'white-space:pre-wrap' }, p.personality)] : null,
@@ -593,6 +727,7 @@ async function screenPersonaEdit(root, id) {
     fillBtn.lastChild.textContent = 'Заполнить поля';
   });
 
+  const voice = voiceFields(p, 'p');
   const err = h('div', { class: 'error', id: 'p-error' });
   async function save(publish) {
     err.textContent = '';
@@ -600,7 +735,7 @@ async function screenPersonaEdit(root, id) {
     const body = {
       name: name.value.trim(), first_message: first.value.trim(), description: desc.value.trim(), backstory: back.value.trim(),
       personality: pers.value.trim(), tags: tags.value.split(/[,;]/).map((s) => s.trim()).filter(Boolean),
-      visibility, status: publish ? 'published' : 'draft', avatar_image_id: avatarId,
+      visibility, status: publish ? 'published' : 'draft', avatar_image_id: avatarId, ...voice.value(),
     };
     try {
       const r = id ? await api('/v1/personas/' + id, { method: 'PUT', body }) : await api('/v1/personas', { method: 'POST', body });
@@ -622,6 +757,7 @@ async function screenPersonaEdit(root, id) {
       counted('Предыстория', back, 2000), counted('Характер', pers, 2000),
       h('label', { class: 'lbl' }, 'Теги через запятую'), tags,
       h('div', { class: 'hint' }, 'Предыстория и характер видны только тебе — их получает ИИ.')),
+    voice.el,
     h('div', { class: 'hint', style: 'margin-top:14px' }, 'Все персонажи по умолчанию 18+.'),
     err,
     h('div', { class: 'row', style: 'margin-top:14px' },
@@ -681,6 +817,195 @@ function avatarSheet(name, description, onUse) {
       h('button', { class: 'btn ghost wide', style: 'margin-top:8px', onclick: showMain }, 'Сгенерировать заново'));
   };
   showMain();
+}
+
+// ------------------------------------------------------------------ stories
+async function startStory(id, withFriend) {
+  const r = await api(`/v1/stories/${id}/rooms`, { method: 'POST' });
+  if (withFriend) await api(`/v1/rooms/${r.room.id}/invite`, { method: 'POST', body: { user_id: withFriend } });
+  location.hash = '#/chat/' + r.room.id;
+}
+async function pickFriendSheet(onPick) {
+  let fr;
+  try { fr = (await api('/v1/friends')).friends || []; } catch (e) { toast(e.message); return; }
+  const s = sheet('С кем играть?', fr.length ? fr.map((f) => h('button', { class: 'list-item', 'data-friend': f.nick, onclick: () => { s.close(); onPick(f); } },
+    avatar(f.nick, userAvatarPath(f), 40), h('div', { class: 'grow' }, h('div', { class: 't' }, f.nick))))
+    : h('div', { class: 'muted' }, 'Сначала добавь друга во вкладке «Друзья».'));
+}
+
+async function screenStory(root, id) {
+  const page = subPage(root, '', '#/characters');
+  let st;
+  try { st = (await api('/v1/stories/' + id)).story; } catch (e) { page.append(errorBox(e.message, () => render())); return; }
+  $('.title', page).textContent = st.title;
+  if (st.mine) {
+    $('.topbar', page).append(
+      h('button', { class: 'icon-btn', id: 'story-edit', 'aria-label': 'Изменить', onclick: () => { location.hash = '#/story-edit/' + id; } }, icon('edit')),
+      h('button', { class: 'icon-btn', id: 'story-delete', 'aria-label': 'Удалить', style: 'color:var(--muted)', onclick: async () => {
+        if (!(await confirmSheet('Удалить историю?', 'Вместе с ней удалятся все её сцены и переписка в них.', 'Удалить', true))) return;
+        try { await api('/v1/stories/' + id, { method: 'DELETE' }); location.hash = '#/characters'; } catch (e) { toast(e.message); }
+      } }, icon('trash')));
+  }
+  const cover = storyCover(st);
+  const pub = st.visibility === 'public';
+  const go = (friend) => async (e) => {
+    const b = e.currentTarget;
+    b.disabled = true;
+    try { await startStory(id, friend); } catch (ex) { toast(ex.message); b.disabled = false; }
+  };
+  const solo = h('button', { class: 'btn primary grow', id: 'story-play' }, 'Играть');
+  solo.addEventListener('click', go(null));
+  const withFriend = h('button', { class: 'btn ghost grow', id: 'story-play-friend' }, 'С другом');
+  withFriend.addEventListener('click', () => pickFriendSheet((f) => startStory(id, f.id).catch((e) => toast(e.message))));
+  const pubBtn = st.mine ? h('button', { class: 'btn ghost wide', id: 'story-publish-toggle', style: 'margin-top:10px' }, icon('globe', 20),
+    pub ? 'Сделать личной' : 'Опубликовать для всех') : null;
+  if (pubBtn) pubBtn.addEventListener('click', async () => {
+    try {
+      await api(`/v1/stories/${id}/visibility`, { method: 'PATCH', body: { visibility: pub ? 'private' : 'public' } });
+      toast(pub ? 'История снова личная' : 'История опубликована');
+      render();
+    } catch (e) { toast(e.message); }
+  });
+  const chars = (st.characters || []).map((c) => h('div', { class: 'list-item', style: 'cursor:default' },
+    avatar(c.name, c.avatar_image_id ? `/v1/stories/${id}/images/${c.avatar_image_id}` : null, 44),
+    h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 't' }, c.name, c.role === 'hero' ? h('span', { class: 'pill lilac', style: 'margin-left:6px' }, 'герой игрока') : null),
+      c.appearance || c.personality ? h('div', { class: 's', style: 'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden' }, c.appearance || c.personality) : null)));
+  put(page,
+    cover ? h('div', { class: 'story-cover' }, authImg(cover, st.title)) : null,
+    h('div', { class: 'center', style: 'font-size:24px;font-weight:700;margin-top:8px' }, st.title),
+    h('div', { class: 'center muted' }, st.mine ? (pub ? 'Твоя история · публичная' : 'Твоя история · личная') : 'Автор: ' + ((st.author && st.author.nick) || '—')),
+    h('div', { class: 'row', style: 'margin-top:14px' }, solo, withFriend), pubBtn,
+    !st.mine ? h('div', { class: 'hint' }, 'Ты сыграешь свою копию истории — её можно менять, оригинал автора не изменится.') : null,
+    st.description ? [h('div', { class: 'section' }, 'О чём'), h('div', { style: 'white-space:pre-wrap' }, st.description)] : null,
+    st.world_rules ? [h('div', { class: 'section' }, 'Мир'), h('div', { class: 'muted', style: 'white-space:pre-wrap' }, st.world_rules)] : null,
+    chars.length ? [h('div', { class: 'section' }, 'Персонажи'), chars] : null);
+}
+
+/** Story editor: world, place, several characters (with voices), first messages, visibility. */
+async function screenStoryEdit(root, id) {
+  const page = subPage(root, id ? 'Редактирование истории' : 'Новая история', '#/characters');
+  let st = { title: '', description: '', intro: '', world_rules: '', start_scene: '', cover_image_id: null, visibility: 'private',
+    characters: [{ key: 'k' + uuid().slice(0, 8), role: 'npc', name: '' }], start_messages: [] };
+  if (id) {
+    try { st = (await api('/v1/stories/' + id)).story; } catch (e) { page.append(errorBox(e.message, () => render())); return; }
+    if (!st.mine) { page.append(errorBox('Это не твоя история.', null)); return; }
+  }
+  let cover = st.cover_image_id;
+  let visibility = st.visibility || 'private';
+  const title = h('input', { class: 'field', id: 's-title', value: st.title || '' });
+  const area = (idv, val, ph, rows = 3) => { const t = autoGrow(h('textarea', { class: 'field', id: idv, rows, placeholder: ph })); t.value = val || ''; return t; };
+  const desc = area('s-desc', st.description, 'О чём история — это увидят в каталоге');
+  const world = area('s-world', st.world_rules, 'Эпоха, место, правила мира, тон');
+  const scene = area('s-scene', st.start_scene, 'Где начинается действие и что вокруг', 2);
+  const intro = area('s-intro', st.intro, 'Вступление, которое игроки прочитают первым (необязательно)', 2);
+
+  const coverTile = h('button', { class: 'avatar-tile', id: 's-cover', type: 'button', style: `background:${gradFor(st.title || '?')};width:120px;aspect-ratio:4/3` });
+  const drawCover = () => coverTile.replaceChildren(cover ? authImg(id && cover === st.cover_image_id ? `/v1/stories/${id}/images/${cover}` : '/v1/images/' + cover, 'Обложка') : h('span', null, 'Обложка'));
+  drawCover();
+  coverTile.addEventListener('click', async () => {
+    const f = await pickFile();
+    if (!f) return;
+    try { cover = (await uploadImage(f, 1280)).id; drawCover(); } catch (e) { toast(e.message); }
+  });
+
+  // characters
+  const charsBox = h('div', { id: 's-chars' });
+  const rows = [];
+  function charRow(c) {
+    const r = { c: { ...c }, avatar: c.avatar_image_id || null };
+    const name = h('input', { class: 'field', 'data-field': 'name', placeholder: 'Имя', maxlength: 40, value: c.name || '' });
+    const role = h('select', { class: 'field', 'data-field': 'role' }, h('option', { value: 'npc' }, 'Ведёт ИИ'), h('option', { value: 'hero' }, 'Герой игрока'));
+    role.value = c.role || 'npc';
+    const look = area('', c.appearance, 'Внешность', 2);
+    const pers = area('', c.personality, 'Характер', 2);
+    const speech = area('', c.speech_style, 'Манера речи в тексте', 2);
+    const back = area('', c.backstory, 'Предыстория (необязательно)', 2);
+    const av = h('button', { class: 'avatar-tile', type: 'button', style: `background:${gradFor(c.name || '?')};width:72px` });
+    const drawAv = () => av.replaceChildren(r.avatar ? authImg(id && r.avatar === c.avatar_image_id ? `/v1/stories/${id}/images/${r.avatar}` : '/v1/images/' + r.avatar, 'Аватар') : h('span', null, 'Аватар'));
+    drawAv();
+    av.addEventListener('click', () => avatarSheet(name.value, look.value, (iid) => { r.avatar = iid; drawAv(); }));
+    const voice = voiceFields(c, 'c' + rows.length);
+    const voiceWrap = h('div', null, voice.el);
+    const syncRole = () => voiceWrap.classList.toggle('hidden', role.value !== 'npc');
+    role.addEventListener('change', syncRole);
+    syncRole();
+    const del = h('button', { class: 'icon-btn small', type: 'button', 'aria-label': 'Убрать персонажа', style: 'color:var(--error)' }, icon('trash', 18));
+    r.el = h('div', { class: 'card char-card', style: 'margin-top:12px' },
+      h('div', { class: 'row' }, av, h('div', { class: 'grow' }, name, role), del),
+      look, pers, speech, back, voiceWrap);
+    del.addEventListener('click', () => { rows.splice(rows.indexOf(r), 1); r.el.remove(); drawStarts(); });
+    name.addEventListener('change', drawStarts);
+    r.value = () => ({ ...r.c, name: name.value.trim(), role: role.value, appearance: look.value.trim(), personality: pers.value.trim(),
+      speech_style: speech.value.trim(), backstory: back.value.trim(), avatar_image_id: r.avatar, ...voice.value(),
+      key: r.c.key || r.c.id });
+    rows.push(r);
+    charsBox.append(r.el);
+  }
+  (st.characters || []).forEach(charRow);
+  const addChar = h('button', { class: 'btn ghost wide', id: 's-add-char', type: 'button', style: 'margin-top:10px' }, icon('plus', 18), 'Добавить персонажа');
+  addChar.addEventListener('click', () => { if (rows.length >= 10) { toast('До 10 персонажей'); return; } charRow({ key: 'k' + uuid().slice(0, 8), role: 'npc', name: '' }); drawStarts(); });
+
+  // first messages
+  const startsBox = h('div', { id: 's-starts' });
+  let starts = (st.start_messages || []).map((m) => ({ ...m }));
+  function drawStarts() {
+    const opts = () => [h('option', { value: 'narrator' }, 'Рассказчик'),
+      ...rows.filter((r) => r.value().role === 'npc' && r.value().name).map((r) => h('option', { value: r.value().key }, r.value().name))];
+    fill(startsBox, starts.map((m, i) => {
+      const sp = h('select', { class: 'field' }, ...opts());
+      sp.value = m.speaker || 'narrator';
+      if (sp.value !== (m.speaker || 'narrator')) sp.value = 'narrator';
+      sp.addEventListener('change', () => { m.speaker = sp.value; });
+      const t = area('', m.text, '*Действие* и реплика с тире', 2);
+      t.addEventListener('input', () => { m.text = t.value; });
+      return h('div', { class: 'card', style: 'margin-top:10px' }, h('div', { class: 'row' }, h('div', { class: 'grow' }, sp),
+        h('button', { class: 'icon-btn small', type: 'button', 'aria-label': 'Убрать', style: 'color:var(--error)', onclick: () => { starts.splice(i, 1); drawStarts(); } }, icon('trash', 18))), t);
+    }));
+  }
+  drawStarts();
+  const addStart = h('button', { class: 'btn ghost wide', id: 's-add-start', type: 'button', style: 'margin-top:10px' }, icon('plus', 18), 'Добавить первое сообщение');
+  addStart.addEventListener('click', () => { starts.push({ speaker: 'narrator', text: '' }); drawStarts(); });
+
+  const seg = h('div', { class: 'seg' });
+  const drawSeg = () => seg.replaceChildren(...[['public', 'Публичная'], ['private', 'Личная']].map(([v, l]) =>
+    h('button', { type: 'button', id: 's-vis-' + v, class: visibility === v ? 'on' : '', onclick: () => { visibility = v; drawSeg(); } }, l)));
+  drawSeg();
+
+  const err = h('div', { class: 'error', id: 's-error' });
+  const save = h('button', { class: 'btn primary wide', id: 's-save', style: 'margin-top:14px' }, 'Сохранить');
+  save.addEventListener('click', async () => {
+    err.textContent = '';
+    const characters = rows.map((r) => r.value());
+    if (!title.value.trim()) { err.textContent = 'Дай истории название.'; return; }
+    if (characters.some((c) => !c.name)) { err.textContent = 'У каждого персонажа должно быть имя.'; return; }
+    if (!characters.some((c) => c.role === 'npc')) { err.textContent = 'Нужен хотя бы один персонаж, которого ведёт ИИ.'; return; }
+    if (characters.filter((c) => c.role === 'hero').length > 2) { err.textContent = 'Героев игроков может быть не больше двух.'; return; }
+    const body = { title: title.value.trim(), description: desc.value.trim(), world_rules: world.value.trim(), start_scene: scene.value.trim(),
+      intro: intro.value.trim(), cover_image_id: cover, visibility, characters,
+      start_messages: starts.filter((m) => (m.text || '').trim()).map((m) => ({ speaker: m.speaker || 'narrator', text: m.text.trim() })) };
+    save.disabled = true;
+    try {
+      const r = id ? await api('/v1/stories/' + id, { method: 'PUT', body }) : await api('/v1/stories', { method: 'POST', body });
+      location.replace('#/story/' + r.story.id);
+    } catch (e) { err.textContent = e.message; save.disabled = false; }
+  });
+
+  put(page,
+    h('div', { class: 'row', style: 'margin-top:6px' }, coverTile,
+      h('div', { class: 'grow' }, h('div', { style: 'font-weight:600' }, 'История'),
+        h('div', { class: 'muted small' }, 'Мир, место и несколько персонажей. Играть можно одному или с другом — тогда у каждого свой герой.'))),
+    counted('Название *', title, 80),
+    counted('Описание', desc, 1500),
+    counted('Мир и правила', world, 3000),
+    counted('Стартовая сцена', scene, 1000),
+    counted('Вступление', intro, 2000),
+    h('div', { class: 'section' }, 'Персонажи'),
+    h('div', { class: 'hint' }, '«Ведёт ИИ» — за них отвечает ИИ и озвучивает их голосом. «Герой игрока» — за него пишешь ты или друг (до двух).'),
+    charsBox, addChar,
+    h('div', { class: 'section' }, 'Первые сообщения'), startsBox, addStart,
+    h('label', { class: 'lbl' }, 'Видимость'), seg,
+    h('div', { class: 'hint' }, 'Публичную историю видят все; другие играют свою копию и не меняют твою.'),
+    err, save);
 }
 
 // ------------------------------------------------------------------ chats list
@@ -834,11 +1159,27 @@ function screenChat(root, rid) {
       m.text && m.text !== 'Фото сцены' ? h('div', { class: 'cap' }, m.text) : null);
   }
 
+  function speakBtn(m) {
+    if (!st.room || !st.room.voice_available) return null;
+    const b = h('button', { class: 'speak', type: 'button', 'data-speak': m.id, 'aria-label': 'Озвучить' }, icon('speaker', 17));
+    b.addEventListener('click', (e) => { e.stopPropagation(); playVoice(m.id, `/v1/rooms/${rid}/messages/${m.id}/speech`); });
+    return b;
+  }
+  const onVoice = () => {
+    for (const b of list.querySelectorAll('[data-speak]')) {
+      const k = b.getAttribute('data-speak');
+      b.classList.toggle('on', PLAYER.key === k);
+      b.classList.toggle('busy', PLAYER.key === 'loading:' + k);
+      b.replaceChildren(icon(PLAYER.key === k ? 'stop' : 'speaker', 17));
+    }
+  };
+  document.addEventListener('voice-state', onVoice);
+
   function msgEl(m) {
     if (m.image_id && m.kind !== 'player') return photoEl(m);
     if (m.kind === 'system') return h('div', { class: 'm-system' }, m.text);
     if (m.kind === 'narrator') {
-      const el = h('div', { class: 'narrator', 'data-kind': 'narrator' }, h('div', { class: 'lbl2' }, 'РАССКАЗЧИК'),
+      const el = h('div', { class: 'narrator', 'data-kind': 'narrator' }, h('div', { class: 'lbl2' }, 'РАССКАЗЧИК', speakBtn(m)),
         h('div', { class: 'txt' }, richText(m.text, true)), m.edited ? h('span', { class: 'edited' }, 'изменено') : null);
       if (canEdit(m)) longPress(el, () => openEdit(m));
       return el;
@@ -851,7 +1192,7 @@ function screenChat(root, rid) {
       av.addEventListener('click', () => { if (st.room && st.room.kind === 'chat' && m.character_id) location.hash = '#/persona/' + m.character_id; });
       // thoughts and actions on the black background, every spoken part as its own bubble
       const parts = segments(m.text).map((sg) => (sg.act ? h('div', { class: 'thought' }, sg.text) : h('div', { class: 'bubble char' }, sg.text)));
-      const col = h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, m.speaker_name), parts,
+      const col = h('div', { class: 'm-col' }, h('div', { class: 'm-name' }, m.speaker_name, speakBtn(m)), parts,
         m.edited ? h('span', { class: 'edited' }, 'изменено') : null);
       if (canEdit(m)) longPress(col, () => openEdit(m));
       return h('div', { class: 'm-row', 'data-kind': 'character' }, av, col);
@@ -1184,6 +1525,10 @@ function screenChat(root, rid) {
     const owner = room.my_role === 'owner';
     const label = room.kind === 'chat' ? 'Удалить чат' : owner ? 'Удалить сцену' : 'Выйти из сцены';
     const s = sheet(null,
+      room.kind === 'chat' && room.story && room.story.characters && room.story.characters[0]
+        ? h('button', { class: 'btn ghost wide', id: 'menu-persona', style: 'margin-bottom:8px', onclick: () => { s.close(); location.hash = '#/persona/' + room.story.characters[0].id; } }, 'Персонаж: описание и голос') : null,
+      room.kind === 'story' && owner && room.story && room.story.mine
+        ? h('button', { class: 'btn ghost wide', id: 'menu-edit-story', style: 'margin-bottom:8px', onclick: () => { s.close(); location.hash = '#/story-edit/' + room.story.id; } }, 'Редактировать историю') : null,
       h('button', { class: 'btn ghost wide', id: 'menu-image-settings', style: 'margin-bottom:8px', onclick: () => { s.close(); openImageSettings(); } }, 'Стиль и описание картинок'),
       h('button', { class: 'btn ghost wide', style: 'margin-bottom:8px', onclick: () => { s.close(); openScenePrompt(); } }, 'Картинка по своему описанию'),
       h('button', { class: 'btn danger wide', id: 'leave', onclick: async () => {
@@ -1195,7 +1540,7 @@ function screenChat(root, rid) {
   });
 
   loop();
-  return () => { alive = false; ctrl.abort(); unfit(); };
+  return () => { alive = false; ctrl.abort(); unfit(); stopVoice(); document.removeEventListener('voice-state', onVoice); };
 }
 
 // ------------------------------------------------------------------ friends
@@ -1369,6 +1714,14 @@ async function screenProfile(root) {
       field.focus();
     } }, icon('edit', 20)));
 
+  // gender: how characters address the player
+  const genderSeg = h('div', { class: 'seg', id: 'gender' });
+  const drawGender = () => genderSeg.replaceChildren(...[['', 'Не указан'], ['male', 'Мужской'], ['female', 'Женский']].map(([g, l]) =>
+    h('button', { type: 'button', id: 'gender-' + (g || 'none'), class: (u.gender || '') === g ? 'on' : '', onclick: async () => {
+      try { u = (await api('/v1/me', { method: 'PATCH', body: { gender: g } })).user; store.me = { ...(store.me || {}), ...u }; drawGender(); } catch (e) { toast(e.message); }
+    } }, l)));
+  drawGender();
+
   // password change
   const oldPw = h('input', { class: 'field', id: 'old-password', type: 'password', placeholder: 'Старый пароль', autocomplete: 'current-password' });
   const newPw = h('input', { class: 'field', id: 'change-password', type: 'password', placeholder: 'Новый пароль (от 6 символов)', autocomplete: 'new-password', style: 'margin-top:8px' });
@@ -1412,6 +1765,7 @@ async function screenProfile(root) {
         try { u = (await api('/v1/me', { method: 'PATCH', body: { avatar_image_id: '' } })).user; drawAv(); } catch (e) { toast(e.message); }
       } }, 'Убрать') : null),
     nickRow,
+    h('label', { class: 'lbl' }, 'Пол — так к тебе будут обращаться персонажи'), genderSeg,
     h('label', { class: 'lbl' }, 'О себе'), about, saveAbout,
     h('div', { class: 'card', style: 'margin-top:20px' },
       h('div', { style: 'font-weight:600' }, 'Вход с другого устройства'),
@@ -1457,6 +1811,8 @@ const ROUTES = [
   [/^#\/characters$/, screenCharacters],
   [/^#\/persona\/([\w-]+)$/, screenPersona],
   [/^#\/persona-edit(?:\/([\w-]+))?$/, screenPersonaEdit],
+  [/^#\/story\/([\w-]+)$/, screenStory],
+  [/^#\/story-edit(?:\/([\w-]+))?$/, screenStoryEdit],
   [/^#\/chats$/, screenChats],
   [/^#\/chat\/([\w-]+)$/, screenChat],
   [/^#\/friends$/, screenFriends],
