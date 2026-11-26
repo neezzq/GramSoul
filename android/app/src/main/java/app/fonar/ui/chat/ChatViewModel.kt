@@ -38,6 +38,8 @@ data class ChatState(
     val lastPrompt: LastPromptRes? = null,
     val suggestions: List<String> = emptyList(),
     val suggestBusy: Boolean = false,
+    /** Own photos being sent right now. */
+    val uploading: Int = 0,
 )
 
 class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
@@ -181,6 +183,25 @@ class ChatViewModel(private val g: AppGraph, val roomId: String) : ViewModel() {
     fun requestPhoto(prompt: String) = action { id ->
         val res = g.api.photo(roomId, id, prompt.trim())
         _state.update { it.copy(imageJob = res.image_job ?: it.imageJob) }
+    }
+
+    /** The player's own picture in the chat (the server keeps it for a week). */
+    fun uploadPhoto(context: android.content.Context, uri: android.net.Uri) {
+        _state.update { it.copy(uploading = it.uploading + 1) }
+        val app = context.applicationContext
+        viewModelScope.launch {
+            try {
+                val res = g.api.uploadChatPhoto(app, roomId, uri, UUID.randomUUID().toString())
+                all[res.message.id] = res.message
+                _state.update { s -> s.copy(messages = all.values.filter { !it.hidden }.sortedBy { it.seq }) }
+            } catch (e: ApiException) {
+                _state.update { it.copy(toast = e.message) }
+            } catch (e: NetworkException) {
+                _state.update { it.copy(toast = "Фото не отправлено — нет связи") }
+            } finally {
+                _state.update { it.copy(uploading = (it.uploading - 1).coerceAtLeast(0)) }
+            }
+        }
     }
 
     /** Fix a line; the server sends the new text to everyone in the room through sync. */

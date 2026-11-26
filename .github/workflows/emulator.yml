@@ -1,7 +1,7 @@
 name: Emulators (two phones)
 
 # Two clean Android emulators play together through the minified app.
-# Default: backend + live Ollama run on the CI machine (http://10.0.2.2:8000).
+# Default: the backend runs on the CI machine (http://10.0.2.2:8000) with a local stand-in for OpenRouter.
 on:
   workflow_dispatch:
     inputs:
@@ -28,18 +28,15 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
 
-      - name: Backend with live Ollama
+      - name: Backend with a mock OpenRouter
         if: inputs.backend_url == ''
         run: |
-          docker run -d --name ollama -p 11434:11434 -e OLLAMA_NUM_PARALLEL=1 ollama/ollama:0.40.17
-          for i in $(seq 1 30); do curl -fs localhost:11434/api/tags >/dev/null && break; sleep 2; done
-          docker exec ollama ollama pull qwen2.5:0.5b
           pip install -q -r server/requirements.txt
           mkdir -p /tmp/data
-          # cloud mode is exercised against a local stand-in for the OpenRouter API (no real key in CI)
+          # all AI goes to a local stand-in for the OpenRouter API (no real key in CI)
           nohup python3 tools/mock_openrouter.py 9009 > /tmp/mock.log 2>&1 &
-          (cd server && DATA_DIR=/tmp/data OLLAMA_URL=http://127.0.0.1:11434 LLM_NUM_THREAD=2 \
-             OPENROUTER_API_KEY=sk-or-mock OPENROUTER_BASE_URL=http://127.0.0.1:9009/api/v1 DEFAULT_AI_MODE=local \
+          (cd server && DATA_DIR=/tmp/data \
+             OPENROUTER_API_KEY=sk-or-mock OPENROUTER_BASE_URL=http://127.0.0.1:9009/api/v1 \
              nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/api.log 2>&1 &)
           for i in $(seq 1 30); do curl -fs localhost:8000/v1/health && break; sleep 1; done
 
@@ -109,4 +106,3 @@ jobs:
           tail -n 25 /tmp/emu-A.log /tmp/emu-B.log 2>/dev/null || true
           grep -v -e "/sync?" -e "/inbox/wait" /tmp/api.log 2>/dev/null | tail -n 80 || true
           tail -n 20 /tmp/mock.log 2>/dev/null || true
-          docker logs --tail 30 ollama 2>&1 || true

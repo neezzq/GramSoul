@@ -57,6 +57,10 @@ class AppGraph(context: Context, backendUrl: String) {
     val api = Api(backendUrl, tokenProvider = { (session.value as? SessionStore.State.Active)?.session?.token })
     val drafts = DraftStore(context)
 
+    /** true = an account made before passwords existed: the app shows only "set a password" until it has one. */
+    private val _needsPassword = MutableStateFlow(false)
+    val needsPassword: StateFlow<Boolean> = _needsPassword
+
     init {
         appScope.launch {
             api.unauthorized.collect {
@@ -64,6 +68,18 @@ class AppGraph(context: Context, backendUrl: String) {
                 _session.value = sessionStore.load()
             }
         }
+        if (session.value is SessionStore.State.Active) checkPassword()
+    }
+
+    /** Asks the server whether this account still has no password (null from an older server = nothing to do). */
+    fun checkPassword() {
+        appScope.launch {
+            runCatching { api.me() }.onSuccess { _needsPassword.value = it.user.has_password == false }
+        }
+    }
+
+    fun onPasswordSet() {
+        _needsPassword.value = false
     }
 
     val me: UserDto?
@@ -71,12 +87,14 @@ class AppGraph(context: Context, backendUrl: String) {
 
     fun onRegistered(token: String, user: UserDto) {
         sessionStore.save(token, user)
+        _needsPassword.value = user.has_password == false
         _session.value = sessionStore.load()
     }
 
     fun startOver() {
         sessionStore.clear()
         drafts.clearAll()
+        _needsPassword.value = false
         _session.value = sessionStore.load()
     }
 }

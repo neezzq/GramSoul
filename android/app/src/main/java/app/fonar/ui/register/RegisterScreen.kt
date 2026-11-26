@@ -2,6 +2,8 @@ package app.fonar.ui.register
 
 import app.fonar.ui.components.glow
 import androidx.compose.foundation.background
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -74,43 +76,128 @@ fun Lantern(modifier: Modifier = Modifier) {
     )
 }
 
+/** Same limits as the server: 6–128 characters, not only spaces. */
+fun localPasswordError(pw: String): String? = when {
+    pw.isEmpty() -> null
+    pw.length < 6 -> "Пароль — не короче 6 символов."
+    pw.length > 128 -> "Пароль слишком длинный (максимум 128 символов)."
+    pw.isBlank() -> "Пароль не может состоять из пробелов."
+    else -> null
+}
+
+@Composable
+fun AppLogo(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Image(
+        painter = androidx.compose.ui.res.painterResource(app.fonar.R.drawable.logo_full),
+        contentDescription = "GramSoul",
+        // smaller on short screens so the form and its button stay in view
+        modifier = modifier.size(if (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 640) 120.dp else 190.dp)
+            .testTag("app_logo"),
+    )
+}
+
+@Composable
+fun PasswordField(
+    value: String,
+    onChange: (String) -> Unit,
+    label: String,
+    tag: String,
+    error: String? = null,
+    hint: String? = null,
+    imeAction: ImeAction = ImeAction.Next,
+    onDone: () -> Unit = {},
+) {
+    var shown by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = { if (it.length <= 128) onChange(it) },
+        label = { Text(label) },
+        singleLine = true,
+        isError = error != null,
+        supportingText = (error ?: hint)?.let { t -> { Text(t, modifier = Modifier.testTag(tag + "_hint")) } },
+        visualTransformation = if (shown) androidx.compose.ui.text.input.VisualTransformation.None
+            else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+        trailingIcon = {
+            androidx.compose.material3.IconButton(onClick = { shown = !shown }) {
+                androidx.compose.material3.Icon(
+                    if (shown) androidx.compose.material.icons.Icons.Outlined.VisibilityOff
+                    else androidx.compose.material.icons.Icons.Outlined.Visibility,
+                    contentDescription = if (shown) "Скрыть пароль" else "Показать пароль",
+                    tint = Fonar.Muted,
+                )
+            }
+        },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+            autoCorrectEnabled = false, imeAction = imeAction,
+        ),
+        keyboardActions = KeyboardActions(onGo = { onDone() }, onDone = { onDone() }),
+        colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
+        modifier = Modifier.fillMaxWidth().testTag(tag),
+    )
+}
+
+private enum class AuthMode { SIGNUP, LOGIN, CODE }
+
 @Composable
 fun RegisterScreen() {
     val graph = LocalContext.current.graph
     val scope = rememberCoroutineScope()
     var nick by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var password2 by rememberSaveable { mutableStateOf("") }
     var code by rememberSaveable { mutableStateOf("") }
-    var transferMode by rememberSaveable { mutableStateOf(false) }
+    var mode by rememberSaveable { mutableStateOf(AuthMode.SIGNUP) }
     var nickTaken by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    val localError = localNickError(nick)
+    val localError = if (mode == AuthMode.SIGNUP) localNickError(nick) else null
+    val pwError = if (mode == AuthMode.SIGNUP) localPasswordError(password) else null
+    val mismatch = mode == AuthMode.SIGNUP && password2.isNotEmpty() && password2 != password
+
+    fun switchTo(m: AuthMode) { mode = m; error = null; nickTaken = false }
 
     fun submit() {
         val n = nick.trim()
         if (n.isEmpty()) { error = "Введи ник."; return }
         if (localError != null || busy) return
-        if (transferMode && code.count { it.isLetterOrDigit() } < 8) { error = "Введи код переноса — 8 символов."; return }
+        when (mode) {
+            AuthMode.CODE -> if (code.count { it.isLetterOrDigit() } < 8) { error = "Введи код переноса — 8 символов."; return }
+            AuthMode.LOGIN -> if (password.isEmpty()) { error = "Введи пароль."; return }
+            AuthMode.SIGNUP -> {
+                if (password.isEmpty()) { error = "Придумай пароль."; return }
+                if (pwError != null) return
+                if (password2 != password) { error = "Пароли не совпадают."; return }
+            }
+        }
         busy = true
         error = null
         scope.launch {
             try {
-                if (transferMode) {
-                    val res = graph.api.loginWithTransferCode(n, code.trim())
-                    graph.onRegistered(res.token, res.user)
-                } else {
-                    val res = graph.api.register(n)
-                    graph.onRegistered(res.token, res.user)
+                when (mode) {
+                    AuthMode.CODE -> graph.api.loginWithTransferCode(n, code.trim()).let { graph.onRegistered(it.token, it.user) }
+                    AuthMode.LOGIN -> graph.api.login(n, password).let { graph.onRegistered(it.token, it.user) }
+                    AuthMode.SIGNUP -> graph.api.register(n, password).let { graph.onRegistered(it.token, it.user) }
                 }
             } catch (e: ApiException) {
                 nickTaken = e.code == "nick_taken"
-                error = if (nickTaken) "Ник занят. Если это твой ник с другого телефона — войди с кодом переноса." else e.message
+                error = when {
+                    nickTaken -> "Ник занят. Если он твой — нажми «Вход»."
+                    e.code == "bad_credentials" -> "Неверный ник или пароль. Если пароля ещё нет — войди по коду переноса."
+                    else -> e.message
+                }
             } catch (e: NetworkException) {
                 error = "Нет связи с сервером. Проверь интернет и попробуй ещё раз."
             } finally {
                 busy = false
             }
         }
+    }
+
+    val ready = !busy && nick.isNotBlank() && localError == null && when (mode) {
+        AuthMode.SIGNUP -> password.isNotEmpty() && pwError == null && password2.isNotEmpty() && !mismatch
+        AuthMode.LOGIN -> password.isNotEmpty()
+        AuthMode.CODE -> code.isNotBlank()
     }
 
     Column(
@@ -125,81 +212,96 @@ fun RegisterScreen() {
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(56.dp))
-        Lantern()
-        Spacer(Modifier.height(18.dp))
-        Text(
-            androidx.compose.ui.text.buildAnnotatedString {
-                append("Gram")
-                pushStyle(androidx.compose.ui.text.SpanStyle(color = Fonar.Lamp)); append("Soul"); pop()
-            },
-            style = MaterialTheme.typography.headlineLarge, color = Fonar.Text,
-        )
+        Spacer(Modifier.height(16.dp))
+        AppLogo()
         Text(
             "Ролевые чаты с ИИ-персонажами\nвместе с друзьями",
             style = MaterialTheme.typography.bodyLarge,
             color = Fonar.Muted,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 6.dp),
+            modifier = Modifier.padding(top = 4.dp),
         )
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(24.dp))
+        if (mode != AuthMode.CODE) {
+            app.fonar.ui.components.Segmented(
+                options = listOf("Регистрация", "Вход"),
+                selected = if (mode == AuthMode.SIGNUP) 0 else 1,
+                onSelect = { switchTo(if (it == 0) AuthMode.SIGNUP else AuthMode.LOGIN) },
+                tags = listOf("mode_signup", "mode_login"),
+            )
+            Spacer(Modifier.height(14.dp))
+        } else {
+            Text("Вход по коду переноса", style = MaterialTheme.typography.titleMedium, color = Fonar.Text,
+                modifier = Modifier.padding(bottom = 10.dp))
+        }
+        val nickErrorShown = localError ?: if (mode == AuthMode.SIGNUP && nickTaken) error else null
         OutlinedTextField(
             value = nick,
             onValueChange = { if (it.length <= 24) { nick = it; error = null; nickTaken = false } },
             label = { Text("Ник") },
             singleLine = true,
-            isError = localError != null || (!transferMode && error != null),
+            isError = nickErrorShown != null,
             supportingText = {
-                Text(localError ?: (if (!transferMode) error else null) ?: "3–20 символов: буквы, цифры, «_» и «.»",
+                Text(nickErrorShown ?: if (mode == AuthMode.SIGNUP) "3–20 символов: буквы, цифры, «_» и «.»" else "",
                     modifier = Modifier.testTag("nick_hint"))
             },
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
-                imeAction = if (transferMode) ImeAction.Next else ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { submit() }),
+                imeAction = ImeAction.Next),
             colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
             modifier = Modifier.fillMaxWidth().testTag("nick_input"),
         )
-        if (transferMode) {
-            Spacer(Modifier.height(4.dp))
-            OutlinedTextField(
+        when (mode) {
+            AuthMode.SIGNUP -> {
+                PasswordField(password, { password = it; error = null }, "Пароль", "password_input",
+                    error = pwError, hint = "Не короче 6 символов")
+                PasswordField(password2, { password2 = it; error = null }, "Повтори пароль", "password2_input",
+                    error = if (mismatch) "Пароли не совпадают." else null,
+                    imeAction = ImeAction.Go, onDone = { submit() })
+            }
+            AuthMode.LOGIN -> PasswordField(password, { password = it; error = null }, "Пароль", "password_input",
+                imeAction = ImeAction.Go, onDone = { submit() })
+            AuthMode.CODE -> OutlinedTextField(
                 value = code,
                 onValueChange = { if (it.length <= 12) { code = it.uppercase(); error = null } },
                 label = { Text("Код переноса") },
                 placeholder = { Text("ABCD-EFGH", color = Fonar.Faint) },
                 singleLine = true,
-                isError = error != null,
-                supportingText = { Text(error ?: "Создай код в профиле на старом телефоне — он действует 10 минут") },
+                supportingText = { Text("Создай код в профиле на старом телефоне — он действует 10 минут") },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false, imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { submit() }),
                 colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
                 modifier = Modifier.fillMaxWidth().testTag("transfer_code_input"),
             )
         }
+        val shownError = error?.takeIf { nickErrorShown != it }
+        if (shownError != null) {
+            Text(shownError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 4.dp).testTag("auth_error"))
+        }
         Spacer(Modifier.height(12.dp))
         Button(
             onClick = { submit() },
-            enabled = !busy && nick.isNotBlank() && localError == null,
+            enabled = ready,
             modifier = Modifier.fillMaxWidth().height(54.dp)
-                .then(if (!busy && nick.isNotBlank() && localError == null) Modifier.glow() else Modifier)
+                .then(if (ready) Modifier.glow() else Modifier)
                 .testTag("start_button"),
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Fonar.OnLamp)
-            else Text("Войти", style = MaterialTheme.typography.titleMedium)
+            else Text(if (mode == AuthMode.SIGNUP) "Создать аккаунт" else "Войти", style = MaterialTheme.typography.titleMedium)
         }
         Spacer(Modifier.height(8.dp))
         androidx.compose.material3.TextButton(
-            onClick = { transferMode = !transferMode; error = null; nickTaken = false },
+            onClick = { switchTo(if (mode == AuthMode.CODE) AuthMode.LOGIN else AuthMode.CODE) },
             modifier = Modifier.testTag("transfer_toggle"),
         ) {
             Text(
-                if (transferMode) "Я здесь впервые — создать ник" else "Вход с другого телефона по коду переноса",
-                color = if (nickTaken && !transferMode) Fonar.Lamp else Fonar.Muted,
+                if (mode == AuthMode.CODE) "Войти по паролю" else "Вход с другого телефона по коду переноса",
+                color = Fonar.Muted,
             )
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
-            "Без пароля и почты: новый ник сразу становится твоим аккаунтом, ключ входа хранится на этом телефоне. " +
-                "Чтобы войти с другого телефона, создай в профиле код переноса.",
+            "Без почты: ник и пароль — это весь аккаунт. Без пароля можно войти по коду переноса из профиля на старом телефоне.",
             color = Fonar.Faint,
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center,
@@ -208,6 +310,68 @@ fun RegisterScreen() {
         Text("Версия ${app.fonar.BuildConfig.VERSION_NAME}", color = Fonar.Faint.copy(alpha = 0.7f),
             style = MaterialTheme.typography.labelSmall, modifier = Modifier.testTag("app_version"))
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/** Accounts made before passwords existed land here once and cannot go further until a password is set. */
+@Composable
+fun SetPasswordScreen() {
+    val graph = LocalContext.current.graph
+    val activity = LocalContext.current as? android.app.Activity
+    val scope = rememberCoroutineScope()
+    var password by rememberSaveable { mutableStateOf("") }
+    var password2 by rememberSaveable { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val pwError = localPasswordError(password)
+    val mismatch = password2.isNotEmpty() && password2 != password
+    val ready = !busy && password.isNotEmpty() && pwError == null && password2 == password
+    androidx.activity.compose.BackHandler { activity?.finish() }
+
+    fun submit() {
+        if (!ready) { if (password2 != password) error = "Пароли не совпадают."; return }
+        busy = true; error = null
+        scope.launch {
+            try {
+                graph.api.setPassword(password)
+                graph.onPasswordSet()
+            } catch (e: ApiException) {
+                error = e.message
+            } catch (e: NetworkException) {
+                error = "Нет связи с сервером. Проверь интернет и попробуй ещё раз."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Column(
+        Modifier.fillMaxSize().background(Fonar.Night).systemBarsPadding().imePadding()
+            .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).testTag("set_password_screen"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(28.dp))
+        AppLogo()
+        Spacer(Modifier.height(8.dp))
+        Text("Придумай пароль", style = MaterialTheme.typography.headlineSmall, color = Fonar.Text)
+        Text(
+            "Теперь вход — по нику и паролю. Без пароля дальше не пустит: так аккаунт можно открыть на любом телефоне, а чужой — нельзя.",
+            color = Fonar.Muted, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 8.dp, bottom = 18.dp),
+        )
+        PasswordField(password, { password = it; error = null }, "Новый пароль", "new_password_input",
+            error = pwError, hint = "Не короче 6 символов")
+        PasswordField(password2, { password2 = it; error = null }, "Повтори пароль", "new_password2_input",
+            error = if (mismatch) "Пароли не совпадают." else error, imeAction = ImeAction.Go, onDone = { submit() })
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { submit() }, enabled = ready,
+            modifier = Modifier.fillMaxWidth().height(54.dp).then(if (ready) Modifier.glow() else Modifier)
+                .testTag("save_password_button"),
+        ) {
+            if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Fonar.OnLamp)
+            else Text("Сохранить пароль", style = MaterialTheme.typography.titleMedium)
+        }
     }
 }
 

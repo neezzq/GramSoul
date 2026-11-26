@@ -21,8 +21,13 @@ jobs:
         run: |
           pip install -q -r server/requirements.txt
           mkdir -p /tmp/webdata
+          # a throwaway admin password for this run only, so the admin page is tested too
+          ADMIN_PASSWORD="ci-$(openssl rand -hex 12)"
+          echo "::add-mask::$ADMIN_PASSWORD"
+          echo "ADMIN_PASSWORD=$ADMIN_PASSWORD" >> "$GITHUB_ENV"
+          ADMIN_PASSWORD_HASH="$(cd server && python3 -c 'import sys; from app.common import hash_password; print(hash_password(sys.argv[1]))' "$ADMIN_PASSWORD")"
           (cd server && DATA_DIR=/tmp/webdata LLM_BACKEND=fake REPLY_DEBOUNCE_MS=300 RL_REGISTER_PER_HOUR=1000 \
-             nohup python3 ../tools/web_dev.py 8010 > /tmp/web.log 2>&1 &)
+             ADMIN_PASSWORD_HASH="$ADMIN_PASSWORD_HASH" nohup python3 ../tools/web_dev.py 8010 > /tmp/web.log 2>&1 &)
           for i in $(seq 1 30); do curl -fs localhost:8010/app/ >/dev/null && break; sleep 1; done
       - name: Playwright
         run: |

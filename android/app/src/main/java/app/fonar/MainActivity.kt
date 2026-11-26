@@ -16,6 +16,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -73,6 +75,8 @@ object Routes {
 fun FonarRoot() {
     val graph = LocalContext.current.graph
     val session by graph.session.collectAsStateWithLifecycle()
+    val needsPassword by graph.needsPassword.collectAsStateWithLifecycle()
+    val passwordGate = needsPassword && session is SessionStore.State.Active
     FonarTheme {
         val nav = rememberNavController()
         fun routeFor(s: SessionStore.State) = when (s) {
@@ -95,6 +99,11 @@ fun FonarRoot() {
             }
         }
         androidx.compose.material3.Surface(color = Fonar.Night, contentColor = Fonar.Text) {
+        androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+        // hidden from accessibility and UI tests while the password screen covers it
+        androidx.compose.foundation.layout.Box(
+            Modifier.fillMaxSize().then(if (passwordGate) Modifier.clearAndSetSemantics { } else Modifier)
+        ) {
         NavHost(
             navController = nav,
             startDestination = start,
@@ -127,6 +136,17 @@ fun FonarRoot() {
             composable(Routes.CARD) { e ->
                 CharacterCardScreen(nav, e.arguments!!.getString("roomId")!!, e.arguments!!.getString("charId")!!)
             }
+        }
+        }
+        // old accounts without a password: nothing else is reachable until one is set
+        if (passwordGate) {
+            androidx.compose.foundation.layout.Box(
+                Modifier.fillMaxSize().background(Fonar.Night)
+                    // swallow taps so nothing underneath reacts
+                    .clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { }
+                    .semantics { testTagsAsResourceId = true }
+            ) { app.fonar.ui.register.SetPasswordScreen() }
+        }
         }
         }
     }

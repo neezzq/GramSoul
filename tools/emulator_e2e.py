@@ -36,6 +36,9 @@ def adb(dev, *args, **kw) -> str:
     return sh("adb", "-s", dev, *args, **kw)
 
 
+PASSWORD = "lighthouse42"
+
+
 def ok(name, cond, info=""):
     RESULTS.append((name, bool(cond), info))
     print(("OK   " if cond else "FAIL ") + name + (f" — {info}" if info else ""), flush=True)
@@ -293,18 +296,24 @@ def main():
         dismiss_system_dialogs(d, dump(d))
         launch(d)
 
-    # 1. registration on two clean installs
+    # 1. registration with nick + password on two clean installs
+    def fill_password(d):
+        for rid in ("password_input", "password2_input"):
+            tap_id(d, rid)
+            type_text(d, PASSWORD)
+        hide_keyboard(d)
+
     tap_id(A, "nick_input")
     type_text(A, nick_a)
-    hide_keyboard(A)
+    fill_password(A)
     shot(A, "01_register")
     tap_id(A, "start_button")
     wait(A, rid="my_nick", timeout=60)
-    ok("A registered by nick only", True, nick_a)
+    ok("A registered with nick + password", True, nick_a)
 
     tap_id(B, "nick_input")
     type_text(B, nick_a.lower())  # someone else's nick, other case
-    hide_keyboard(B)
+    fill_password(B)
     tap_id(B, "start_button")
     n = wait(B, text="Ник занят", timeout=30)
     shot(B, "02_register_taken")
@@ -315,7 +324,7 @@ def main():
     hide_keyboard(B)
     tap_id(B, "start_button")
     wait(B, rid="my_nick", timeout=60)
-    ok("B registered by nick only", True, nick_b)
+    ok("B registered with nick + password", True, nick_b)
     shot(B, "03_home")
 
     # 2. A finds B by nickname and sends a request
@@ -420,14 +429,9 @@ def main():
     shot(B, "12_regenerated")
     ok("regenerated reaction is the same on both phones", ra == rb, f"{ra} | {rb}")
 
-    # 7b. cloud AI + scene photo (owner switches the mode; both see cloud reactions and the photo)
+    # 7b. cloud AI (the only one now) + scene photo drawn with one tap
+    ok("no switch for the removed local model", find(dump(A), rid="ai_mode") is None)
     if args.cloud:
-        tap_id(A, "ai_mode")
-        tap_id(A, "mode_cloud")
-        shot(A, "12a_ai_mode")
-        tap_id(A, "mode_apply")
-        wait(B, text="облачный", timeout=60)
-        ok("owner switched the scene to cloud AI; friend sees it", True)
         tap_id(A, "chat_input")
         type_text(A, "*opens the window* Look outside!")
         tap_id(A, "send_button")
@@ -437,15 +441,10 @@ def main():
         shot(B, "12b_cloud_reply")
         ok("cloud reaction arrived on both phones", True)
         tap_id(B, "photo_button")
-        tap_id(B, "photo_prompt")
-        type_text(B, "lighthouse in fog")
-        hide_keyboard(B)
-        shot(B, "12c_photo_panel")
-        tap_id(B, "photo_confirm")
         wait(A, rid="msg_photo", timeout=120)
         wait(B, rid="msg_photo", timeout=60)
         shot(A, "12d_photo")
-        ok("scene photo with the friend's prompt shown on both phones", True)
+        ok("one tap draws the current scene; shown on both phones", True)
 
     # 8. B restarts the app: automatic login, scene still there
     adb(B, "shell", "am", "force-stop", PKG)

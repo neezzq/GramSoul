@@ -10,10 +10,18 @@ data class UserDto(
     val about: String = "",
     val online: Boolean = false,
     val last_seen_at: Long? = null,
+    /** Only in the own profile: false = an old account that must set a password first. */
+    val has_password: Boolean? = null,
 )
 
 @Serializable
-data class RegisterReq(val nick: String)
+data class RegisterReq(val nick: String, val password: String? = null)
+
+@Serializable
+data class LoginReq(val nick: String, val password: String)
+
+@Serializable
+data class PasswordReq(val password: String, val old_password: String? = null)
 
 @Serializable
 data class RegisterRes(val token: String, val user: UserDto, val demo_story_id: String? = null)
@@ -200,8 +208,10 @@ data class RoomDto(
     val invite: InviteDto? = null,
     val rev: Long = 0,
     val meta_rev: Long = 0,
-    val ai_mode: String = "local",
+    val ai_mode: String = "cloud",
     val cloud_available: Boolean = false,
+    /** The small on-server model; off on the current server, so its switch is hidden. */
+    val local_available: Boolean = false,
     val images_available: Boolean = false,
     val ai_models: Map<String, String> = emptyMap(),
 )

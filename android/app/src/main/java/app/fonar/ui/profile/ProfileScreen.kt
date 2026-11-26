@@ -3,6 +3,8 @@ package app.fonar.ui.profile
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -193,10 +195,16 @@ fun ProfileScreen(nav: NavHostController) {
                         if (left > 0) {
                             Text(c.code, fontFamily = FontFamily.Monospace, fontSize = 34.sp, fontWeight = FontWeight.Bold,
                                 color = Fonar.Lamp, textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth().testTag("transfer_code"))
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable(onClickLabel = "Скопировать код") {
+                                        copyText(context, "Код переноса", c.code)
+                                        message = "Код скопирован"
+                                    }
+                                    .testTag("transfer_code"))
                             val s = left / 1000
-                            Text("Действует ещё ${s / 60}:${"%02d".format(s % 60)}", color = Fonar.Muted,
-                                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text("Нажми на код, чтобы скопировать · ещё ${s / 60}:${"%02d".format(s % 60)}", color = Fonar.Muted,
+                                textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.fillMaxWidth())
                         } else {
                             Text("Код истёк — получи новый.", color = Fonar.Error, modifier = Modifier.fillMaxWidth(),
                                 textAlign = TextAlign.Center)
@@ -219,10 +227,192 @@ fun ProfileScreen(nav: NavHostController) {
                     ) { Text(if (code == null) "Получить код переноса" else "Новый код") }
                 }
             }
+            Spacer(Modifier.height(16.dp))
+            PasswordCard(hasPassword = me?.has_password == true, onDone = { u -> me = u; message = "Пароль сохранён" },
+                onError = { message = it })
+            Spacer(Modifier.height(8.dp))
+            MyStuff(nav, onMessage = { message = it })
+            Spacer(Modifier.height(20.dp))
+            var askLogout by remember { mutableStateOf(false) }
+            OutlinedButton(
+                onClick = { askLogout = true },
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Fonar.Error),
+                modifier = Modifier.fillMaxWidth().testTag("logout"),
+            ) { Text("Выйти из аккаунта") }
+            if (askLogout) ConfirmDelete(
+                title = "Выйти из аккаунта?", text = "Войти снова можно по нику и паролю.", confirm = "Выйти",
+                onYes = {
+                    askLogout = false
+                    scope.launch {
+                        runCatching { graph.api.logout() }
+                        graph.startOver()
+                    }
+                },
+                onNo = { askLogout = false },
+            )
             Spacer(Modifier.height(24.dp))
             Text("GramSoul ${app.fonar.BuildConfig.VERSION_NAME}", color = Fonar.Faint,
                 style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("app_version"))
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+private fun copyText(context: android.content.Context, label: String, text: String) {
+    val cm = context.getSystemService(android.content.ClipboardManager::class.java) ?: return
+    cm.setPrimaryClip(android.content.ClipData.newPlainText(label, text))
+}
+
+@Composable
+private fun ConfirmDelete(title: String, text: String, confirm: String = "Удалить", onYes: () -> Unit, onNo: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onNo,
+        title = { Text(title) },
+        text = { Text(text, color = Fonar.Muted) },
+        confirmButton = {
+            TextButton(onClick = onYes, modifier = Modifier.testTag("confirm_yes")) { Text(confirm, color = Fonar.Error) }
+        },
+        dismissButton = { TextButton(onClick = onNo) { Text("Отмена") } },
+        containerColor = Fonar.Surface,
+    )
+}
+
+@Composable
+private fun PasswordCard(hasPassword: Boolean, onDone: (UserDto) -> Unit, onError: (String) -> Unit) {
+    val graph = LocalContext.current.graph
+    val scope = rememberCoroutineScope()
+    var open by rememberSaveable { mutableStateOf(false) }
+    var old by rememberSaveable { mutableStateOf("") }
+    var pw by rememberSaveable { mutableStateOf("") }
+    var pw2 by rememberSaveable { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    val pwError = app.fonar.ui.register.localPasswordError(pw)
+    val mismatch = pw2.isNotEmpty() && pw2 != pw
+    val ready = !busy && pw.isNotEmpty() && pwError == null && pw2 == pw && (!hasPassword || old.isNotEmpty())
+    Card(colors = CardDefaults.cardColors(containerColor = Fonar.Surface), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Пароль", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f))
+                TextButton(onClick = { open = !open }, modifier = Modifier.testTag("password_toggle")) {
+                    Text(if (open) "Скрыть" else if (hasPassword) "Сменить" else "Задать")
+                }
+            }
+            if (open) {
+                if (hasPassword) app.fonar.ui.register.PasswordField(old, { old = it }, "Старый пароль", "old_password_input")
+                app.fonar.ui.register.PasswordField(pw, { pw = it }, "Новый пароль", "change_password_input",
+                    error = pwError, hint = "Не короче 6 символов")
+                app.fonar.ui.register.PasswordField(pw2, { pw2 = it }, "Повтори пароль", "change_password2_input",
+                    error = if (mismatch) "Пароли не совпадают." else null, imeAction = androidx.compose.ui.text.input.ImeAction.Done)
+                Button(
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            try {
+                                onDone(graph.api.setPassword(pw, old.ifEmpty { null }).user)
+                                old = ""; pw = ""; pw2 = ""; open = false
+                            } catch (e: Exception) {
+                                onError(errText(e))
+                            } finally {
+                                busy = false
+                            }
+                        }
+                    },
+                    enabled = ready,
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("password_save"),
+                ) { Text("Сохранить пароль") }
+            }
+        }
+    }
+}
+
+private class Ask(val title: String, val text: String, val action: suspend () -> Unit)
+
+/** The player's own characters, stories and chats, each with a delete button. */
+@Composable
+private fun MyStuff(nav: NavHostController, onMessage: (String) -> Unit) {
+    val graph = LocalContext.current.graph
+    val scope = rememberCoroutineScope()
+    var personas by remember { mutableStateOf<List<app.fonar.data.PersonaDto>?>(null) }
+    var stories by remember { mutableStateOf<List<app.fonar.data.StoryDto>?>(null) }
+    var rooms by remember { mutableStateOf<List<app.fonar.data.RoomListItem>?>(null) }
+    var ask by remember { mutableStateOf<Ask?>(null) }
+
+    suspend fun load() {
+        runCatching { graph.api.personas(scope = "mine").personas }.onSuccess { personas = it }.onFailure { onMessage(errText(it as Exception)) }
+        runCatching { graph.api.stories().stories }.onSuccess { stories = it }
+        runCatching { graph.api.rooms().rooms }.onSuccess { rooms = it }
+    }
+    LaunchedEffect(Unit) { load() }
+
+    @Composable
+    fun Section(title: String, tag: String, empty: Boolean, content: @Composable () -> Unit) {
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 6.dp).testTag(tag))
+        if (empty) Text("Пусто.", color = Fonar.Faint, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.fillMaxWidth())
+        else content()
+    }
+
+    @Composable
+    fun Item(title: String, sub: String, tag: String, onOpen: (() -> Unit)?, deleteLabel: String, onDelete: () -> Unit) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                .then(if (onOpen != null) Modifier.clickable(onClick = onOpen) else Modifier)
+                .testTag(tag),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                Text(title.ifBlank { "Без названия" }, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                if (sub.isNotBlank()) Text(sub, color = Fonar.Muted, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.testTag(tag + "_delete")) {
+                Icon(androidx.compose.material.icons.Icons.Outlined.Delete, deleteLabel, tint = Fonar.Error)
+            }
+        }
+    }
+
+    val ps = personas
+    Section("Мои персонажи", "my_personas", ps != null && ps.isEmpty()) {
+        ps?.forEach { p ->
+            Item(p.name, if (p.status == "draft") "черновик" else if (p.visibility == "public") "публичный" else "личный",
+                "my_persona", { nav.navigate(app.fonar.Routes.persona(p.id)) }, "Удалить персонажа") {
+                ask = Ask("Удалить персонажа «${p.name}»?", "Карточка исчезнет у всех. Чаты с ним останутся, но новых ответов не будет.") {
+                    graph.api.deletePersona(p.id)
+                }
+            }
+        }
+    }
+    val ss = stories
+    Section("Мои истории", "my_stories", ss != null && ss.isEmpty()) {
+        ss?.forEach { st ->
+            val sid = st.id ?: return@forEach
+            Item(st.title, if (st.is_demo) "демо-история" else "своя история", "my_story", null, "Удалить историю") {
+                ask = Ask("Удалить историю «${st.title}»?", "Вместе с ней удалятся все её сцены и переписка в них.") {
+                    graph.api.deleteStory(sid)
+                }
+            }
+        }
+    }
+    val rs = rooms
+    Section("Мои чаты", "my_rooms", rs != null && rs.isEmpty()) {
+        rs?.forEach { r ->
+            val owner = r.my_role == "owner"
+            Item(r.story_title, r.last_message, "my_room", { nav.navigate(app.fonar.Routes.chat(r.id)) },
+                if (owner) "Удалить переписку" else "Выйти из сцены") {
+                ask = Ask(if (owner) "Удалить переписку «${r.story_title}»?" else "Выйти из сцены «${r.story_title}»?",
+                    if (owner) "Переписка удалится навсегда." else "Ты больше не увидишь эту сцену.") {
+                    graph.api.deleteRoom(r.id)
+                }
+            }
+        }
+    }
+    ask?.let { a ->
+        ConfirmDelete(a.title, a.text, onYes = {
+            ask = null
+            scope.launch {
+                try { a.action(); load() } catch (e: Exception) { onMessage(errText(e)) }
+            }
+        }, onNo = { ask = null })
     }
 }

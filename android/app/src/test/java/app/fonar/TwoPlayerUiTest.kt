@@ -17,6 +17,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
@@ -82,13 +83,26 @@ class TwoPlayerUiTest {
 
     private fun shot(name: String) = compose.onRoot().captureRoboImage("build/screens/$name.png")
 
-    private fun register(nick: String) {
+    private fun register(nick: String, password: String = TEST_PASSWORD) {
         compose.waitTag("nick_input")
+        compose.waitTag("app_logo")
         shot("01_register")
         compose.onNodeWithTag("nick_input").performTextInput(nick)
-        compose.onNodeWithTag("start_button").performClick()
+        compose.onNodeWithTag("password_input").performTextInput(password)
+        compose.onNodeWithTag("password2_input").performTextInput(password)
+        compose.onNodeWithTag("start_button").performScrollTo().performClick()
         compose.waitTag("my_nick")
         compose.waitTag("stories_list")
+    }
+
+    private fun clipboardText(): String? =
+        (app.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).primaryClip
+            ?.getItemAt(0)?.text?.toString()
+
+    private fun jpeg(): ByteArray {
+        val bmp = android.graphics.Bitmap.createBitmap(64, 48, android.graphics.Bitmap.Config.ARGB_8888)
+        bmp.eraseColor(android.graphics.Color.rgb(255, 140, 198))
+        return java.io.ByteArrayOutputStream().also { bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it) }.toByteArray()
     }
 
     @Test
@@ -99,6 +113,13 @@ class TwoPlayerUiTest {
             compose.waitTag("nick_input")
             compose.onNodeWithTag("nick_input").performTextInput("ab cd")
             compose.waitText("пробелов")
+            // password rules are checked before anything is sent
+            compose.onNodeWithTag("password_input").performTextInput("123")
+            compose.waitText("не короче 6")
+            compose.onNodeWithTag("password_input").performTextReplacement(TEST_PASSWORD)
+            compose.onNodeWithTag("password2_input").performTextInput(TEST_PASSWORD + "x")
+            compose.waitText("Пароли не совпадают")
+            compose.onNodeWithTag("password2_input").performTextReplacement(TEST_PASSWORD)
             compose.onNodeWithTag("nick_input").performTextReplacement(taken.lowercase())
             compose.onNodeWithTag("start_button").performClick()
             compose.waitText("Ник занят")
@@ -121,7 +142,7 @@ class TwoPlayerUiTest {
     @Test
     fun transferCodeProfileAndSearch() {
         val nick = uniq("Mira.k")
-        val old = RemotePlayer(backend, nick)
+        val old = RemotePlayer(backend, nick, password = null)  // made before passwords existed
         val other = RemotePlayer(backend, uniq("Kirill"))
         other.call { setAbout("Играю за мага") }
         val code = old.call { transferCode() }.code
@@ -136,7 +157,17 @@ class TwoPlayerUiTest {
             compose.onNodeWithTag("transfer_code_input").performTextReplacement(code)
             shot("02b_transfer_login")
             compose.onNodeWithTag("start_button").performClick()
+            // an account without a password cannot go further until it sets one
+            compose.waitTag("set_password_screen")
+            assertTrue(compose.onAllNodesWithTag("my_nick").fetchSemanticsNodes().isEmpty())
+            shot("02c_set_password")
+            compose.onNodeWithTag("new_password_input").performTextInput("secret-77")
+            compose.onNodeWithTag("new_password2_input").performTextInput("secret-77")
+            compose.onNodeWithTag("save_password_button").performClick()
+            // the home screen underneath is only reachable once the password screen is gone
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("set_password_screen", useUnmergedTree = true).fetchSemanticsNodes().isEmpty() }
             compose.waitTag("my_nick")
+            assertEquals(true, old.call { me() }.user.has_password)
             val s = (app.graph.session.value as SessionStore.State.Active).session
             assertEquals(nick, s.nick)
             assertEquals(old.user.id, s.userId)
@@ -150,6 +181,10 @@ class TwoPlayerUiTest {
             compose.waitUntil(10_000) { old.call { me() }.user.about == "Люблю маяки" }
             compose.onNodeWithTag("transfer_code_button").performClick()
             compose.waitTag("transfer_code")
+            // a tap on the code copies it
+            compose.onNodeWithTag("transfer_code").performClick()
+            compose.waitText("Код скопирован")
+            assertTrue(clipboardText().orEmpty().matches(Regex("[A-Z0-9]{4}-[A-Z0-9]{4}")))
             shot("05b_profile")
             compose.onNodeWithTag("back").performClick()
 
@@ -162,6 +197,57 @@ class TwoPlayerUiTest {
             shot("05c_people_search")
             compose.onNodeWithTag("add_friend_${other.user.nick}").performClick()
             compose.waitTag("request_sent_${other.user.nick}")
+        }
+    }
+
+    /** Profile: own stories and chats can be deleted; log out and back in with nick + password. */
+    @Test
+    fun profileDeleteLogoutAndPasswordLogin() {
+        val nick = uniq("Nika")
+        ActivityScenario.launch(MainActivity::class.java).use {
+            register(nick)
+            val api = appApi(app, backend)
+            val demo = kotlinx.coroutines.runBlocking { api.stories() }.stories.first { it.is_demo }
+            val room = kotlinx.coroutines.runBlocking { api.createRoom(demo.id!!) }.room
+            compose.onNodeWithTag("profile_button").performClick()
+            compose.waitTag("my_room")
+            compose.onNodeWithTag("my_rooms").performScrollTo()
+            shot("05d_profile_lists")
+            // delete the chat
+            compose.onNodeWithTag("my_room_delete").performScrollTo().performClick()
+            compose.waitTag("confirm_yes")
+            compose.onNodeWithTag("confirm_yes").performClick()
+            compose.waitUntil(10_000) { kotlinx.coroutines.runBlocking { api.rooms() }.rooms.none { it.id == room.id } }
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("my_room").fetchSemanticsNodes().isEmpty() }
+            // delete the story
+            compose.onNodeWithTag("my_story_delete").performScrollTo().performClick()
+            compose.onNodeWithTag("confirm_yes").performClick()
+            compose.waitUntil(10_000) { kotlinx.coroutines.runBlocking { api.stories() }.stories.none { it.id == demo.id } }
+            // change the password from the profile
+            compose.onNodeWithTag("password_toggle").performScrollTo().performClick()
+            compose.onNodeWithTag("old_password_input").performTextInput(TEST_PASSWORD)
+            compose.onNodeWithTag("change_password_input").performTextInput("new-pass-99")
+            compose.onNodeWithTag("change_password2_input").performTextInput("new-pass-99")
+            compose.onNodeWithTag("password_save").performScrollTo().performClick()
+            compose.waitText("Пароль сохранён")
+            // log out
+            // (a semantic click: the "saved" snackbar may still cover the bottom of the screen)
+            compose.onNodeWithTag("logout").performScrollTo().performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+            compose.waitTag("confirm_yes")
+            compose.onNodeWithTag("confirm_yes").performClick()
+            compose.waitTag("nick_input")
+            assertTrue(app.graph.session.value is SessionStore.State.None)
+            // log in with nick + password; a wrong password says nothing about the nick
+            compose.onNodeWithTag("mode_login").performClick()
+            compose.onNodeWithTag("nick_input").performTextInput(nick.lowercase())
+            compose.onNodeWithTag("password_input").performTextInput(TEST_PASSWORD)
+            compose.onNodeWithTag("start_button").performClick()
+            compose.waitText("Неверный ник или пароль")
+            compose.onNodeWithTag("password_input").performTextReplacement("new-pass-99")
+            shot("01b_login")
+            compose.onNodeWithTag("start_button").performClick()
+            compose.waitTag("my_nick")
+            assertEquals(nick, (app.graph.session.value as SessionStore.State.Active).session.nick)
         }
     }
 
@@ -186,6 +272,14 @@ class TwoPlayerUiTest {
                 compose.onAllNodesWithTag("regenerate_button").fetchSemanticsNodes().firstOrNull()
                     ?.config?.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Disabled) == null
             }
+            // the action in stars is on the black background, the spoken part is a bubble
+            compose.waitTag("msg_thought")
+            compose.waitTag("msg_speech")
+            // "*" puts a pair of stars with the cursor between them
+            compose.onNodeWithTag("action_button").performClick()
+            compose.onNodeWithTag("chat_input").performTextInput("улыбаюсь")
+            compose.waitText("*улыбаюсь*")
+            compose.onNodeWithTag("chat_input").performTextReplacement("")
             // three options for my next turn; picking one fills the input
             compose.onNodeWithTag("suggest_button").performClick()
             compose.waitTag("suggestion_2")
@@ -203,8 +297,11 @@ class TwoPlayerUiTest {
             // regenerate the character's reply
             val before = compose.onAllNodesWithText("Ответ №", substring = true, useUnmergedTree = true).fetchSemanticsNodes()
                 .map { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString() }
-            // the AI's reply can be fixed from the visible "Изменить ответ" link too
-            compose.waitTag("edit_last_ai")
+            // the AI's reply can be fixed from the pencil in the toolbar too
+            compose.onNodeWithTag("edit_last_ai").performClick()
+            compose.waitTag("edit_panel")
+            compose.waitText("Изменить ответ ИИ")
+            compose.onNodeWithTag("edit_cancel").performClick()
             compose.onNodeWithTag("regenerate_button").performClick()
             compose.waitUntil(30_000) {
                 val now = compose.onAllNodesWithText("Ответ №", substring = true, useUnmergedTree = true).fetchSemanticsNodes()
@@ -348,21 +445,27 @@ class TwoPlayerUiTest {
                 visible == b.call { sync(roomId, 0, -1, 0) }.messages.filter { !it.hidden }.map { it.id }
             }
             shot("07_chat_after_regenerate")
-            // AI mode: the owner switches the scene to the local model (the test backend has cloud enabled)
-            compose.onNodeWithTag("ai_mode").performClick()
-            compose.waitTag("mode_local")
-            shot("07a_ai_mode")
-            compose.onNodeWithTag("mode_local").performClick()
-            compose.onNodeWithTag("mode_apply").performClick()
-            compose.waitUntil(20_000) { b.call { room(roomId) }.room.ai_mode == "local" }
-            // scene photo: drawn by the image model and shown to both players
+            // the small local model is gone: no switch for it
+            assertTrue(compose.onAllNodesWithTag("ai_mode").fetchSemanticsNodes().isEmpty())
+            // one tap on the camera draws what is happening now
             compose.onNodeWithTag("photo_button").performClick()
+            compose.waitTag("msg_photo", 30_000)
+            compose.waitUntil(30_000) { b.call { sync(roomId, 0, -1, 0) }.image_job?.status == "done" }
+            // the friend sends a photo of their own: it is on their side of the chat
+            b.uploadPhoto(roomId, jpeg(), "мой кот")
+            compose.waitTag("msg_own_photo", 30_000)
+            compose.waitText("мой кот")
+            shot("07d_own_photo")
+            // a long press on the camera: draw by own description
+            compose.onNodeWithTag("photo_button").performTouchInput { longClick() }
             compose.waitTag("photo_confirm")
             compose.onNodeWithTag("photo_prompt").performTextInput("маяк в тумане")
             shot("07c_photo_panel")
             compose.onNodeWithTag("photo_confirm").performClick()
-            compose.waitTag("msg_photo", 30_000)
-            assertTrue(b.call { sync(roomId, 0, -1, 0) }.messages.any { it.image_id != null && it.text == "маяк в тумане" })
+            compose.waitUntil(30_000) {
+                b.call { sync(roomId, 0, -1, 0) }.messages.any { it.image_id != null && it.text == "маяк в тумане" }
+            }
+            compose.waitText("маяк в тумане")
             shot("07b_photo")
             // failure keeps the turn and offers a retry
             compose.onNodeWithTag("chat_input").performTextInput("Проверка ошибки #fail")

@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -287,3 +288,25 @@ fun glassFieldColors(container: Color = Fonar.Surface) = OutlinedTextFieldDefaul
     cursorColor = Fonar.Lamp,
     focusedLabelColor = Fonar.Lamp,
 )
+
+/** iOS-like segmented control: a glass capsule with the chosen option as a pink pill. */
+@Composable
+fun Segmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, tags: List<String> = emptyList(), modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.Row(
+        modifier.fillMaxWidth().glass(RoundedCornerShape(999.dp)).padding(4.dp),
+    ) {
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            Box(
+                Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(999.dp))
+                    .background(if (on) Fonar.Lamp else Color.Transparent)
+                    .clickable { onSelect(i) }
+                    .then(tags.getOrNull(i)?.let { Modifier.testTag(it) } ?: Modifier)
+                    .semantics { this.selected = on },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, color = if (on) Fonar.OnLamp else Fonar.Muted, style = MaterialTheme.typography.titleSmall)
+            }
+        }
+    }
+}

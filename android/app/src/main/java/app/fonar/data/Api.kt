@@ -135,8 +135,13 @@ class Api(
     private fun q(s: String) = java.net.URLEncoder.encode(s, "UTF-8")
 
     // ------------------------------------------------------------------ endpoints
-    suspend fun register(nick: String): RegisterRes = post("/v1/register", RegisterReq(nick))
+    suspend fun register(nick: String, password: String? = null): RegisterRes =
+        post("/v1/register", RegisterReq(nick, password))
+    suspend fun login(nick: String, password: String): LoginRes = post("/v1/login", LoginReq(nick, password))
+    suspend fun setPassword(password: String, old: String? = null): MeRes =
+        post("/v1/me/password", PasswordReq(password, old))
     suspend fun me(): MeRes = get("/v1/me")
+    suspend fun logout(): OkRes = postEmpty("/v1/logout")
     suspend fun setAbout(about: String): MeRes = patch("/v1/me", AboutReq(about))
     suspend fun setAvatar(imageId: String?): MeRes = patch("/v1/me", AvatarReq(imageId ?: ""))
     suspend fun transferCode(): TransferCodeRes = postEmpty("/v1/me/transfer-code")
@@ -210,6 +215,17 @@ class Api(
             .addFormDataPart("file", "image.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
             .build()
         return exec(Request.Builder().url(url("/v1/images")).post(body).build(), ImageRes.serializer())
+    }
+
+    /** The player's own photo in the chat (kept on the server for a week). */
+    suspend fun uploadChatPhoto(context: Context, roomId: String, uri: Uri, clientId: String, caption: String = ""): PostMessageRes {
+        val bytes = withContext(Dispatchers.IO) { prepareJpeg(context, uri, 1600) }
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", "photo.jpg", bytes.toRequestBody("image/jpeg".toMediaType()))
+            .addFormDataPart("caption", caption)
+            .addFormDataPart("client_id", clientId)
+            .build()
+        return exec(Request.Builder().url(url("/v1/rooms/$roomId/upload")).post(body).build(), PostMessageRes.serializer())
     }
 
     private fun prepareJpeg(context: Context, uri: Uri, maxSide: Int): ByteArray {
