@@ -1,5 +1,6 @@
 package app.fonar.ui.personas
 
+import app.fonar.ui.components.glow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -130,7 +131,7 @@ fun PersonasTab(nav: NavHostController) {
             leadingIcon = { Icon(Icons.Outlined.Search, null, tint = Fonar.Muted) },
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
-            colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
+            colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp).testTag("persona_search"),
         )
         Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -156,7 +157,7 @@ fun PersonasTab(nav: NavHostController) {
                 modifier = Modifier.fillMaxSize().testTag("personas_grid"),
             ) {
                 item(span = { GridItemSpan(2) }) {
-                    Button(onClick = { nav.navigate(Routes.personaEdit(null)) }, modifier = Modifier.fillMaxWidth().testTag("create_persona")) {
+                    Button(onClick = { nav.navigate(Routes.personaEdit(null)) }, modifier = Modifier.fillMaxWidth().glow().testTag("create_persona")) {
                         Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
                         Text("  Создать персонажа")
                     }

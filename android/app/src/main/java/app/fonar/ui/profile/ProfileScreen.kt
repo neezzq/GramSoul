@@ -155,7 +155,7 @@ fun ProfileScreen(nav: NavHostController) {
                 placeholder = { Text("Пара слов для друзей — необязательно", color = Fonar.Faint) },
                 minLines = 3,
                 supportingText = { Text("${about.length}/300") },
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
+                colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
                 modifier = Modifier.fillMaxWidth().testTag("about_input"),
             )
             Button(

@@ -89,6 +89,8 @@ import app.fonar.data.InviteDto
 import app.fonar.data.StoryDto
 import app.fonar.data.UserDto
 import app.fonar.graph
+import app.fonar.ui.components.glass
+import androidx.compose.foundation.layout.navigationBarsPadding
 import app.fonar.openChat
 import app.fonar.ui.components.Avatar
 import app.fonar.ui.components.Banner
@@ -144,18 +146,27 @@ fun HomeScreen(nav: NavHostController) {
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = Fonar.Surface) {
-                Tab.entries.forEach { t ->
-                    val badge = when (t) {
-                        Tab.SCENES -> state.invites.size
-                        Tab.FRIENDS -> state.friends.incoming.size
-                        else -> 0
-                    }
-                    NavigationBarItem(
-                        selected = tab == t,
-                        onClick = { tab = t },
-                        icon = {
-                            BadgedBox(badge = { if (badge > 0) Badge { Text("$badge") } }) {
+            // iOS-26-style floating glass tab bar
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 18.dp, vertical = 10.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().height(66.dp).glass(RoundedCornerShape(33.dp)).padding(horizontal = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Tab.entries.forEach { t ->
+                        val badge = when (t) {
+                            Tab.SCENES -> state.invites.size
+                            Tab.FRIENDS -> state.friends.incoming.size
+                            else -> 0
+                        }
+                        val selected = tab == t
+                        Column(
+                            Modifier.weight(1f).height(54.dp).clip(RoundedCornerShape(27.dp))
+                                .then(if (selected) Modifier.background(Fonar.Lamp.copy(alpha = 0.16f)) else Modifier)
+                                .clickable { tab = t }.testTag("tab_${t.name.lowercase()}"),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            BadgedBox(badge = { if (badge > 0) Badge(containerColor = Fonar.Lamp, contentColor = Fonar.OnLamp) { Text("$badge") } }) {
                                 Icon(
                                     when (t) {
                                         Tab.STORIES -> Icons.AutoMirrored.Outlined.MenuBook
@@ -163,13 +174,14 @@ fun HomeScreen(nav: NavHostController) {
                                         Tab.SCENES -> Icons.Outlined.Forum
                                         Tab.FRIENDS -> Icons.Outlined.Group
                                     }, null,
+                                    tint = if (selected) Fonar.Lamp else Fonar.Muted,
+                                    modifier = Modifier.size(24.dp),
                                 )
                             }
-                        },
-                        label = { Text(t.title) },
-                        colors = NavigationBarItemDefaults.colors(indicatorColor = Fonar.SurfaceHigher),
-                        modifier = Modifier.testTag("tab_${t.name.lowercase()}"),
-                    )
+                            Text(t.title, style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) Fonar.Lamp else Fonar.Muted, maxLines = 1)
+                        }
+                    }
                 }
             }
         },
@@ -470,7 +482,7 @@ private fun FriendsTab(state: HomeState, vm: HomeViewModel) {
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false),
                 keyboardActions = KeyboardActions(onSearch = { vm.search(query) }),
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
+                colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
                 modifier = Modifier.fillMaxWidth().testTag("friend_search_input"),
             )
             Text("По началу или части ника, от 2 символов", color = Fonar.Faint,

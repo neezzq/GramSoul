@@ -13,31 +13,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/** GramSoul palette: deep black with hot-pink neon. */
+/** GramSoul palette, iOS-26-like: pure black, system greys, a soft pink accent with a light glow. */
 object Fonar {
-    val Night = Color(0xFF0A090C)
-    val Surface = Color(0xFF151117)
-    val SurfaceHigh = Color(0xFF1F1922)
-    val SurfaceHigher = Color(0xFF2A2230)
-    val Lamp = Color(0xFFFF4FA3)       // primary hot pink
-    val LampSoft = Color(0xFFFF9BCB)   // light pink
-    val OnLamp = Color(0xFF1A0710)
-    val Sea = Color(0xFFC9A2FF)        // secondary lilac
-    val Text = Color(0xFFF4E9F0)
-    val Muted = Color(0xFFA796A3)
-    val Faint = Color(0xFF66586A)
-    val Error = Color(0xFFFF6B6B)
-    val MyBubble = Color(0xFF3A1430)
-    val FriendBubble = Color(0xFF241A33)
-    val CharBubble = Color(0xFF1A1520)
-    val NarratorBg = Color(0xFF140F16)
-    val Action = Color(0xFFE6A8C8)
+    val Night = Color(0xFF000000)          // background: pure black
+    val Surface = Color(0xFF1C1C1E)        // grouped surfaces (iOS secondarySystemBackground)
+    val SurfaceHigh = Color(0xFF2C2C2E)
+    val SurfaceHigher = Color(0xFF3A3A3C)
+    val Lamp = Color(0xFFFF8CC6)           // accent: soft pink
+    val LampSoft = Color(0xFFFFC1DF)
+    val OnLamp = Color(0xFF240816)
+    val Sea = Color(0xFFC8B4FF)            // secondary: soft lilac
+    val Text = Color(0xFFFFFFFF)
+    val Muted = Color(0xFFA1A1A8)          // secondary label
+    val Faint = Color(0xFF636366)          // tertiary label
+    val Error = Color(0xFFFF6961)
+    val MyBubble = Color(0xFF4A1C35)       // pink-tinted
+    val FriendBubble = Color(0xFF25213A)   // lilac-tinted
+    val CharBubble = Color(0xFF1C1C1E)
+    val NarratorBg = Color(0xFF0E0E10)
+    val Action = Color(0xFFF5B3D4)
+    val Glow = Color(0xFFFF8CC6)
 }
 
 private val scheme = darkColorScheme(
     primary = Fonar.Lamp,
     onPrimary = Fonar.OnLamp,
-    primaryContainer = Color(0xFF4A1034),
+    primaryContainer = Color(0xFF4A1C35),
     onPrimaryContainer = Fonar.LampSoft,
     secondary = Fonar.Sea,
     onSecondary = Color(0xFF1C0B33),
@@ -54,22 +55,25 @@ private val scheme = darkColorScheme(
     surfaceContainer = Fonar.Surface,
     surfaceContainerHigh = Fonar.SurfaceHigh,
     surfaceContainerHighest = Fonar.SurfaceHigher,
-    outline = Color(0xFF4A3A4E),
-    outlineVariant = Color(0xFF2E2432),
+    outline = Color(0xFF3A3A3C),
+    outlineVariant = Color(0xFF2C2C2E),
     error = Fonar.Error,
     onError = Color(0xFF2A0703),
 )
 
 val Serif = FontFamily.Serif
 
+// iOS-like type: bold large titles with tight tracking, 17sp-ish body
 private val typography = Typography().let { t ->
     t.copy(
-        headlineLarge = t.headlineLarge.copy(fontWeight = FontWeight.ExtraBold),
-        headlineMedium = t.headlineMedium.copy(fontWeight = FontWeight.Bold),
-        headlineSmall = t.headlineSmall.copy(fontWeight = FontWeight.Bold),
-        titleLarge = t.titleLarge.copy(fontWeight = FontWeight.Bold),
-        bodyLarge = t.bodyLarge.copy(fontSize = 16.sp, lineHeight = 23.sp),
-        bodyMedium = t.bodyMedium.copy(fontSize = 15.sp, lineHeight = 21.sp),
+        headlineLarge = t.headlineLarge.copy(fontWeight = FontWeight.Bold, fontSize = 34.sp, lineHeight = 41.sp, letterSpacing = (-0.4).sp),
+        headlineMedium = t.headlineMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.3).sp),
+        headlineSmall = t.headlineSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.2).sp),
+        titleLarge = t.titleLarge.copy(fontWeight = FontWeight.Bold, letterSpacing = (-0.2).sp),
+        titleMedium = t.titleMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 17.sp),
+        bodyLarge = t.bodyLarge.copy(fontSize = 16.5.sp, lineHeight = 23.sp, letterSpacing = 0.sp),
+        bodyMedium = t.bodyMedium.copy(fontSize = 15.sp, lineHeight = 21.sp, letterSpacing = 0.sp),
+        labelLarge = t.labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.sp),
     )
 }
 
@@ -83,9 +87,11 @@ fun FonarTheme(content: @Composable () -> Unit) {
         colorScheme = scheme,
         typography = typography,
         shapes = Shapes(
-            small = RoundedCornerShape(10.dp),
-            medium = RoundedCornerShape(16.dp),
-            large = RoundedCornerShape(22.dp),
+            extraSmall = RoundedCornerShape(10.dp),
+            small = RoundedCornerShape(14.dp),
+            medium = RoundedCornerShape(20.dp),
+            large = RoundedCornerShape(26.dp),
+            extraLarge = RoundedCornerShape(32.dp),
         ),
         content = content,
     )

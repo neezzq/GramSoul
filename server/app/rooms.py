@@ -630,17 +630,14 @@ def chats_with_persona(db: Database, user: User, persona_id: int) -> list[dict]:
 
 
 def edit_message(db: Database, user: User, room_pid: str, message_pid: str, body: EditIn) -> dict:
-    """Players edit their own lines; the room owner may also fix the AI's lines.
+    """Players edit their own lines; anyone in the room may fix the AI's lines.
     The next generation sees the edited text."""
     room = member_room(db, user, room_pid)
     m = db.one("SELECT * FROM messages WHERE room_id=? AND public_id=? AND hidden=0", (room["id"], message_pid))
     if not m or m["kind"] == "system" or m["image_id"]:
         raise not_found("Сообщение не найдено")
-    if m["kind"] == "player":
-        if m["user_id"] != user.id:
-            raise ApiError(403, "not_yours", "Можно изменить только своё сообщение.")
-    elif room["owner_id"] != user.id:
-        raise ApiError(403, "not_owner", "Ответы ИИ может править только хозяин.")
+    if m["kind"] == "player" and m["user_id"] != user.id:
+        raise ApiError(403, "not_yours", "Можно изменить только своё сообщение.")
     text = body.text.strip()
     if not text:
         raise ApiError(400, "empty", "Сообщение пустое.")

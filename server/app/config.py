@@ -55,7 +55,7 @@ class Settings:
     cloud_image_model: str = field(default_factory=lambda: _env("CLOUD_IMAGE_MODEL", "google/gemini-3.1-flash-lite-image"))
     cloud_ctx_tokens: int = field(default_factory=lambda: _int("CLOUD_CTX_TOKENS", 16000))
     cloud_max_tokens: int = field(default_factory=lambda: _int("CLOUD_MAX_TOKENS", 700))
-    cloud_temperature: float = field(default_factory=lambda: _float("CLOUD_TEMPERATURE", 0.9))
+    cloud_temperature: float = field(default_factory=lambda: _float("CLOUD_TEMPERATURE", 0.8))
     cloud_recent_messages: int = field(default_factory=lambda: _int("CLOUD_RECENT_MESSAGES", 40))
     cloud_timeout_s: int = field(default_factory=lambda: _int("CLOUD_TIMEOUT_S", 120))
     cloud_reasoning: str = field(default_factory=lambda: _env("CLOUD_REASONING", "off"))  # off | low | medium | high

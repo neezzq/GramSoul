@@ -1,5 +1,6 @@
 package app.fonar.ui.personas
 
+import app.fonar.ui.components.glow
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -312,7 +313,7 @@ fun PersonaEditorScreen(nav: NavHostController, id: String?) {
                 OutlinedButton(onClick = { save(false) }, enabled = !saving, modifier = Modifier.weight(1f).testTag("save_draft")) {
                     Text("Черновик")
                 }
-                Button(onClick = { save(true) }, enabled = !saving, modifier = Modifier.weight(1f).testTag("publish")) {
+                Button(onClick = { save(true) }, enabled = !saving, modifier = Modifier.weight(1f).then(if (!saving) Modifier.glow() else Modifier).testTag("publish")) {
                     if (saving) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Fonar.OnLamp)
                     else Text("Опубликовать")
                 }

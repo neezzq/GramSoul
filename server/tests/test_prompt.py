@@ -8,8 +8,9 @@ def card(name, role="npc", **kw):
 def test_parse_speakers_and_actions():
     raw = "Рассказчик: Ветер стих.\nИва: *сжимает пальцы* Я тут.\nЯн: *встаю* Пойдём!\nХаритон: Эх, юнга!"
     out = P.parse_output(raw, ["Ива", "Харитон"], ["Ян", "Лада"])
-    assert [(p.kind, p.name) for p in out] == [("narrator", "Рассказчик"), ("character", "Ива"), ("character", "Харитон")]
-    assert all("встаю" not in p.text for p in out)  # never speaks for a player's hero
+    # never speaks for a player's hero; what follows an invented hero turn is cut too
+    assert [(p.kind, p.name) for p in out] == [("narrator", "Рассказчик"), ("character", "Ива")]
+    assert all("встаю" not in p.text for p in out)
 
 
 def test_parse_drops_repeats_and_empty_actions():
@@ -98,3 +99,18 @@ def test_style_asks_for_dashes():
                         history=[], facts=[], mode="reply", num_ctx=2048, num_predict=200)
     sys_text = P.build(inp).messages[0]["content"]
     assert "реплики — с тире" in sys_text and "— Слышишь?" in sys_text
+
+
+def test_last_player_turn_is_quoted_in_the_instruction():
+    hist = [P.HistoryItem(1, "character", "Адриан", "*усмехается* — Ну?"),
+            P.HistoryItem(2, "player", "хме", "Ну че молчим"),
+            P.HistoryItem(3, "player", "Лада", "*толкает дверь*")]
+    inp = P.PromptInput(title="T", description="", world_rules="", location="", npcs=[card("Адриан")],
+                        seats=[P.Seat("хме", "хме", None), P.Seat("lada", "Лада", None)], summary="", history=hist,
+                        facts=[], mode="reply", num_ctx=2048, num_predict=200)
+    tail = P.build(inp).messages[-1]["content"]
+    assert "Последний ход: хме: «Ну че молчим» Лада: «*толкает дверь*»" in tail
+    assert "Ответь именно на этот ход" in tail
+    # the quote is never shown back as part of a reply
+    out = P.parse_output("Рассказчик: Тишина. Последний ход: хме: «Ну че молчим»\nАдриан: — Думаю.", ["Адриан"], ["хме", "Лада"])
+    assert all("Последний ход" not in p.text for p in out)

@@ -44,6 +44,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import app.fonar.ui.theme.Fonar
 import coil3.compose.AsyncImage
 
@@ -191,10 +195,7 @@ fun Field(
         maxLines = maxLines,
         singleLine = minLines == 1 && maxLines == 1,
         modifier = modifier.fillMaxWidth().let { m -> if (testTag != null) m.testTag(testTag) else m },
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = Fonar.Surface,
-            unfocusedContainerColor = Fonar.Surface,
-        ),
+        colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
     )
 }
 
@@ -247,3 +248,42 @@ fun Banner(text: String, color: Color = Fonar.Lamp, modifier: Modifier = Modifie
         }
     }
 }
+
+
+// ---------------------------------------------------------------- iOS-26-like surfaces
+
+/** A soft coloured halo around an opaque element (buttons, the send button, the active tab). */
+fun Modifier.glow(
+    color: Color = Fonar.Glow,
+    radius: Dp = 14.dp,
+    alpha: Float = 0.45f,
+    corner: Dp = 999.dp,
+): Modifier = this.drawBehind {
+    val r = radius.toPx()
+    val c = minOf(corner.toPx(), size.minDimension / 2f)
+    drawIntoCanvas { canvas ->
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            this.color = color.copy(alpha = alpha).toArgb()
+            setShadowLayer(r, 0f, 0f, color.copy(alpha = alpha).toArgb())
+        }
+        canvas.nativeCanvas.drawRoundRect(0f, 0f, size.width, size.height, c, c, paint)
+    }
+}
+
+/** Frosted-glass panel: a light vertical sheen and a hairline highlight on the edge. */
+fun Modifier.glass(shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(28.dp), strength: Float = 1f): Modifier =
+    this.clip(shape)
+        .background(Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.13f * strength), Color.White.copy(alpha = 0.06f * strength))))
+        .border(0.8.dp, Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.06f))), shape)
+
+/** Text fields as filled rounded wells (no heavy outline), pink when focused. */
+@Composable
+fun glassFieldColors(container: Color = Fonar.Surface) = OutlinedTextFieldDefaults.colors(
+    focusedContainerColor = container,
+    unfocusedContainerColor = container,
+    disabledContainerColor = container,
+    focusedBorderColor = Fonar.Lamp.copy(alpha = 0.75f),
+    unfocusedBorderColor = Color.White.copy(alpha = 0.08f),
+    cursorColor = Fonar.Lamp,
+    focusedLabelColor = Fonar.Lamp,
+)

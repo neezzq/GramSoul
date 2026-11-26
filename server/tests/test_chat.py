@@ -148,3 +148,21 @@ async def test_chat_access_rules(client):
     s = await wait_generation(client, ha, room["id"])
     assert s["generation"]["status"] == "failed" and "удалён" in s["generation"]["error"]
     assert len(await visible(client, ha, room["id"])) == 2
+
+
+async def test_both_players_can_fix_the_ai_reply_but_not_each_others_lines(client):
+    from .test_api import shared_room
+    ha, hb, a, b, room = await shared_room(client)
+    rid = room["id"]
+    await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Привет всем"}, headers=ha)
+    await wait_generation(client, ha, rid)
+    msgs = await visible(client, hb, rid)
+    ai = next(m for m in reversed(msgs) if m["kind"] in ("character", "narrator"))
+    mine_a = next(m for m in msgs if m["kind"] == "player")
+    r = await client.patch(f"/v1/rooms/{rid}/messages/{ai['id']}", json={"text": "*кивает* — Поправил гость."}, headers=hb)
+    assert r.status_code == 200 and r.json()["message"]["edited"] is True
+    r = await client.patch(f"/v1/rooms/{rid}/messages/{mine_a['id']}", json={"text": "чужое"}, headers=hb)
+    assert r.status_code == 403
+    # the owner sees the guest's fix through sync
+    texts = [m["text"] for m in await visible(client, ha, rid)]
+    assert "*кивает* — Поправил гость." in texts

@@ -2,6 +2,7 @@ package app.fonar.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import app.fonar.ui.components.glow
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.Edit
@@ -160,7 +161,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
     }
 
     fun canEdit(m: MessageDto): Boolean = room != null && m.image_id == null && m.kind != "system" &&
-        ((m.kind == "player" && m.user_id == me) || (m.kind != "player" && room.my_role == "owner"))
+        ((m.kind == "player" && m.user_id == me) || m.kind != "player")
 
     Scaffold(
         topBar = {
@@ -202,7 +203,7 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Fonar.Surface),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Fonar.Night),
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -236,6 +237,19 @@ fun ChatScreen(nav: NavHostController, roomId: String) {
                         } else {
                             MessageItem(m, room, me, roomId, graph.api::roomImageUrl, ::openCard,
                                 onLongPress = if (canEdit(m)) ({ editing = m; showPhoto = false }) else null)
+                        }
+                    }
+                    val lastAi = s.messages.lastOrNull { it.image_id == null && it.kind != "system" }
+                        ?.takeIf { it.kind != "player" && it.generation_id != null && canEdit(it) }
+                    if (lastAi != null && s.pending.isEmpty() && (s.generation?.status != "queued" && s.generation?.status != "running")) {
+                        item(key = "edit_last_ai") {
+                            Row(Modifier.fillMaxWidth().padding(start = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { editing = lastAi; showPhoto = false }, modifier = Modifier.testTag("edit_last_ai")) {
+                                    Icon(Icons.Outlined.Edit, null, tint = Fonar.Muted, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Изменить ответ", color = Fonar.Muted, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
                         }
                     }
                     items(s.pending, key = { "p" + it.clientId }) { p -> PendingItem(p, vm) }
@@ -377,7 +391,7 @@ private fun MessageItem(
                     Text(m.speaker_name, color = Fonar.Lamp, fontWeight = FontWeight.SemiBold,
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.clickable { openCard(c?.id) }.padding(bottom = 3.dp).testTag("name_${m.speaker_name}"))
-                    Bubble(m.text, Fonar.CharBubble, RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp), m.edited, onLongPress,
+                    Bubble(m.text, Fonar.CharBubble, RoundedCornerShape(6.dp, 22.dp, 22.dp, 22.dp), m.edited, onLongPress,
                         paragraphs = true)
                 }
             }
@@ -405,7 +419,7 @@ private fun MessageItem(
                     )
                     Bubble(
                         m.text, if (mine) Fonar.MyBubble else Fonar.FriendBubble,
-                        if (mine) RoundedCornerShape(18.dp, 4.dp, 18.dp, 18.dp) else RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp),
+                        if (mine) RoundedCornerShape(22.dp, 6.dp, 22.dp, 22.dp) else RoundedCornerShape(6.dp, 22.dp, 22.dp, 22.dp),
                         m.edited, onLongPress,
                     )
                 }
@@ -459,7 +473,7 @@ private fun NarratorBlock(text: String, edited: Boolean = false, onLongPress: ((
 @Composable
 private fun PendingItem(p: Pending, vm: ChatViewModel) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-        Surface(color = Fonar.MyBubble.copy(alpha = 0.6f), shape = RoundedCornerShape(18.dp, 4.dp, 18.dp, 18.dp)) {
+        Surface(color = Fonar.MyBubble.copy(alpha = 0.6f), shape = RoundedCornerShape(22.dp, 6.dp, 22.dp, 22.dp)) {
             Text(actionText(p.text), style = MaterialTheme.typography.bodyLarge, color = Fonar.Text.copy(alpha = 0.75f),
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
         }
@@ -535,8 +549,8 @@ private fun Composer(
     val active = g != null && (g.status == "queued" || g.status == "running")
     val lastIsAi = s.messages.lastOrNull { it.image_id == null && it.kind != "system" }?.generation_id != null
     val regenerating = active && g?.kind == "regenerate"
-    Surface(color = Fonar.Surface, tonalElevation = 2.dp) {
-        Column(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 8.dp)) {
+    Surface(color = Fonar.Night) {
+        Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp)) {
             if (editing != null) EditPanel(editing, onSave = onEditSave, onCancel = onEditCancel)
             else if (photoOpen) PhotoPanel(onSubmit = onPhotoSubmit, onClose = onPhoto)
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -606,15 +620,17 @@ private fun Composer(
                     minLines = 1,
                     maxLines = if (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 600) 3 else 5,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Night, unfocusedContainerColor = Fonar.Night),
-                    shape = RoundedCornerShape(20.dp),
+                    colors = app.fonar.ui.components.glassFieldColors(Fonar.Night),
+                    shape = RoundedCornerShape(24.dp),
                     modifier = Modifier.weight(1f).testTag("chat_input"),
                 )
                 Spacer(Modifier.width(8.dp))
+                val canSend = input.text.isNotBlank() && !regenerating
                 FilledIconButton(
                     onClick = onSend,
-                    enabled = input.text.isNotBlank() && !regenerating,
-                    modifier = Modifier.size(52.dp).testTag("send_button"),
+                    enabled = canSend,
+                    modifier = Modifier.size(52.dp).then(if (canSend) Modifier.glow(radius = 12.dp, alpha = 0.5f) else Modifier)
+                        .testTag("send_button"),
                     colors = IconButtonDefaults.filledIconButtonColors(containerColor = Fonar.Lamp, contentColor = Fonar.OnLamp),
                 ) { Icon(Icons.AutoMirrored.Filled.Send, "Отправить") }
             }
@@ -733,7 +749,7 @@ private fun EditPanel(m: MessageDto, onSave: (String) -> Unit, onCancel: () -> U
             OutlinedTextField(
                 value = text, onValueChange = { if (it.length <= 5000) text = it },
                 maxLines = 6,
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Night, unfocusedContainerColor = Fonar.Night),
+                colors = app.fonar.ui.components.glassFieldColors(Fonar.Night),
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp).testTag("edit_input"),
             )
@@ -762,7 +778,7 @@ private fun PhotoPanel(onSubmit: (String) -> Unit, onClose: () -> Unit) {
                     value = what, onValueChange = { if (it.length <= 300) what = it },
                     placeholder = { Text("что показать (необязательно)", color = Fonar.Faint) },
                     singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Night, unfocusedContainerColor = Fonar.Night),
+                    colors = app.fonar.ui.components.glassFieldColors(Fonar.Night),
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.weight(1f).testTag("photo_prompt"),
                 )

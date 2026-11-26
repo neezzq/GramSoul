@@ -213,7 +213,18 @@ def build(inp: PromptInput) -> BuiltPrompt:
     if inp.mode == "continue":
         instr = f"Продолжи сцену — что происходит дальше? Пиши за: {who}."
     else:
-        instr = f"Ответь на последний ход игроков. Пиши за: {who}."
+        # quote the turn the reply must answer: models lose it in a long history
+        last_turn = []
+        for h in reversed(inp.history):
+            if h.kind != "player":
+                break
+            last_turn.append(f"{h.speaker}: «{_clip(h.text, 400)}»")
+        last_turn.reverse()
+        instr = ""
+        if last_turn:
+            instr = "Последний ход: " + " ".join(last_turn) + "\n"
+        instr += (f"Ответь именно на этот ход: персонажи реагируют на эти слова и действия по смыслу и логично "
+                  f"продолжают сцену. Пиши за: {who}.")
     if hero_names:
         instr += f" Не пиши за героев игроков ({', '.join(hero_names)})."
     tail = ("[" + ". ".join(state) + "]\n" if state else "") + instr
@@ -331,6 +342,7 @@ def _is_repeat(text: str, history: list[str]) -> bool:
 
 # Fragments of our own instructions / scene-state block that small models sometimes echo back.
 _SERVICE_MARKERS = ("Место:", "Рядом:", "Уже произошло:", "Пиши за:", "Не пиши за", "Ответь на последний ход",
+                    "Последний ход:", "Ответь именно на этот ход",
                     "Продолжи сцену", "Что было раньше:", "Герои игроков", "Твои персонажи:", "Не повторяй уже сказанное")
 
 
@@ -390,6 +402,8 @@ def parse_output(raw: str, npcs: list[str], heroes: list[str], max_messages: int
                 kind, name = inner_target
                 body = inner.group(2).strip()
             if kind == "hero":
+                if out:
+                    break  # later lines would answer words the player never said
                 skipping_hero = True
                 continue
             skipping_hero = False
@@ -535,6 +549,7 @@ class ChatPromptInput:
 
 
 CHAT_STYLE = (
+    "Всегда отвечай по смыслу на последнее сообщение собеседника, помня всё, что было раньше. "
     "Как отвечать: на языке собеседника; действия и обстановку пиши в *звёздочках* (курсив), реплики — с тире; "
     "3–8 предложений; сохраняй характер и факты диалога; двигай сцену вперёд и не повторяй уже сказанное. "
     "Не подписывай ответ своим именем."

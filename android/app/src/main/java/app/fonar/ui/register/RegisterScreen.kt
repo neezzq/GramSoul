@@ -1,5 +1,6 @@
 package app.fonar.ui.register
 
+import app.fonar.ui.components.glow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -115,7 +116,9 @@ fun RegisterScreen() {
     Column(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color3(0xFF3D0F27), Fonar.Night, Fonar.Night)))
+            .background(Fonar.Night)
+            .background(Brush.radialGradient(listOf(Fonar.Lamp.copy(alpha = 0.16f), Color3(0x00000000)),
+                center = androidx.compose.ui.geometry.Offset(540f, 260f), radius = 900f))
             .systemBarsPadding()
             .imePadding()
             .verticalScroll(rememberScrollState())
@@ -153,7 +156,7 @@ fun RegisterScreen() {
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false,
                 imeAction = if (transferMode) ImeAction.Next else ImeAction.Go),
             keyboardActions = KeyboardActions(onGo = { submit() }),
-            colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
+            colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
             modifier = Modifier.fillMaxWidth().testTag("nick_input"),
         )
         if (transferMode) {
@@ -168,7 +171,7 @@ fun RegisterScreen() {
                 supportingText = { Text(error ?: "Создай код в профиле на старом телефоне — он действует 10 минут") },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false, imeAction = ImeAction.Go),
                 keyboardActions = KeyboardActions(onGo = { submit() }),
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Fonar.Surface, unfocusedContainerColor = Fonar.Surface),
+                colors = app.fonar.ui.components.glassFieldColors(Fonar.Surface),
                 modifier = Modifier.fillMaxWidth().testTag("transfer_code_input"),
             )
         }
@@ -176,7 +179,9 @@ fun RegisterScreen() {
         Button(
             onClick = { submit() },
             enabled = !busy && nick.isNotBlank() && localError == null,
-            modifier = Modifier.fillMaxWidth().height(54.dp).testTag("start_button"),
+            modifier = Modifier.fillMaxWidth().height(54.dp)
+                .then(if (!busy && nick.isNotBlank() && localError == null) Modifier.glow() else Modifier)
+                .testTag("start_button"),
         ) {
             if (busy) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Fonar.OnLamp)
             else Text("Войти", style = MaterialTheme.typography.titleMedium)

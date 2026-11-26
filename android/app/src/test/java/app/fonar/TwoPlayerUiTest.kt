@@ -203,6 +203,8 @@ class TwoPlayerUiTest {
             // regenerate the character's reply
             val before = compose.onAllNodesWithText("Ответ №", substring = true, useUnmergedTree = true).fetchSemanticsNodes()
                 .map { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.joinToString() }
+            // the AI's reply can be fixed from the visible "Изменить ответ" link too
+            compose.waitTag("edit_last_ai")
             compose.onNodeWithTag("regenerate_button").performClick()
             compose.waitUntil(30_000) {
                 val now = compose.onAllNodesWithText("Ответ №", substring = true, useUnmergedTree = true).fetchSemanticsNodes()
@@ -210,7 +212,9 @@ class TwoPlayerUiTest {
                 now.isNotEmpty() && now != before
             }
             // the avatar opens the character's page
-            compose.onAllNodesWithTag("avatar_Вера Солнцева", useUnmergedTree = true)[0].performClick()
+            compose.onAllNodesWithTag("avatar_Вера Солнцева", useUnmergedTree = true).let { all ->
+                all[all.fetchSemanticsNodes().size - 1].performClick()  // the latest one is on screen
+            }
             compose.waitTag("persona_view")
             compose.waitTag("persona_chat_continue")
         }

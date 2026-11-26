@@ -244,13 +244,15 @@ class Worker:
         for attempt in range(3):
             if attempt and time.monotonic() - t_start > 120:
                 break
+            # a retry must still answer the player's turn: no "invent something new", no extra heat for the cloud model
             base_t = settings.cloud_temperature if provider == "cloud" else settings.llm_temperature
-            temperature = None if attempt == 0 else min(1.2, base_t + 0.2 * attempt)
+            temperature = None if attempt == 0 or provider == "cloud" else min(1.0, base_t + 0.1 * attempt)
             messages = [dict(m) for m in built.messages]
             extra = None
             prefill = ""
             if attempt:
-                messages[-1]["content"] += "\nНе повторяй уже сказанное — придумай новую реакцию, новые детали и действия."
+                messages[-1]["content"] += ("\nОтветь по смыслу на последний ход игрока и не повторяй дословно "
+                                            "то, что уже было сказано.")
                 if provider == "local" and not chat:  # assistant prefill is reliable only with the local model
                     prefill = P.NARRATOR + ":"
                     messages.append({"role": "assistant", "content": prefill})
@@ -421,7 +423,8 @@ class Worker:
         error = None
         try:
             lim = self._limits(room)
-            res = await llm.chat(msgs, num_predict=min(400, lim["num_predict"] + 40), provider=lim["provider"])
+            # low temperature: a summary must not invent facts that later derail the story
+            res = await llm.chat(msgs, num_predict=min(400, lim["num_predict"] + 40), provider=lim["provider"], temperature=0.3)
             text = " ".join(res.text.replace("<|im_end|>", "").split())
             if len(text) < 20:
                 raise llm.LLMError("слишком короткое резюме")

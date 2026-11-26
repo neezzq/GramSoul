@@ -1,5 +1,6 @@
 package app.fonar.ui.personas
 
+import app.fonar.ui.components.glow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -158,7 +159,7 @@ fun PersonaScreen(nav: NavHostController, id: String) {
                             }
                         },
                         enabled = !starting,
-                        modifier = Modifier.weight(1f).testTag("persona_chat_new"),
+                        modifier = Modifier.weight(1f).glow().testTag("persona_chat_new"),
                     ) { Text(if (p.chats.isEmpty()) "Начать чат" else "Новый чат") }
                     p.chats.firstOrNull()?.let { last ->
                         androidx.compose.material3.OutlinedButton(

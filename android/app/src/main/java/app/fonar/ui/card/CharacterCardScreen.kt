@@ -152,7 +152,7 @@ fun CharacterCardScreen(nav: NavHostController, roomId: String, charId: String) 
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Fonar.Surface),
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Fonar.Night),
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
