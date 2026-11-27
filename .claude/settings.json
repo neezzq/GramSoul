@@ -1,0 +1,15 @@
+{
+  "enabledPlugins": {
+    "phoenix-security-review@phoenix-security": true,
+    "phoenix-readiness-reviews@phoenix-security": true
+  },
+  "extraKnownMarketplaces": {
+    "phoenix-security": {
+      "source": {
+        "source": "github",
+        "repo": "Security-Phoenix-demo/security-skills-claude-code",
+        "ref": "40ace4aa71017b8214fd9d1a071de235a1abc022"
+      }
+    }
+  }
+}
