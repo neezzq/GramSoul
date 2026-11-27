@@ -117,6 +117,8 @@ async def synthesize(text: str, spec: VoiceSpec, narrator: bool = False) -> Spee
     voice = spec.voice if spec.voice in VOICE_IDS else (settings.tts_narrator_voice if narrator else settings.tts_default_voice)
     spec = VoiceSpec(voice, spec.manner, spec.timbre)
     instr = instructions(spec, narrator)
+    if settings.llm_backend != "fake":
+        await prepare_model()  # the cache key names the model that will actually speak
     path = cache_path(current_model(), spec, instr, text)
     try:
         with open(path, "rb") as f:
@@ -137,7 +139,7 @@ async def synthesize(text: str, spec: VoiceSpec, narrator: bool = False) -> Spee
 
 # The speech model actually used: TTS_MODEL when OpenRouter has it, otherwise the best match from OpenRouter's
 # own list of speech models (model ids there change: dated variants appear and disappear).
-_resolved: dict = {"model": None, "voices": None, "at": 0.0}
+_resolved: dict = {"model": None, "voices": None, "at": 0.0, "tried": 0.0}
 _PREFER = ("gpt-4o-mini-tts", "openai/", "tts")
 
 
@@ -175,6 +177,9 @@ async def _speech_models(client: httpx.AsyncClient, base: str, headers: dict) ->
                 mid = m.get("id") or m.get("slug")
                 if not mid:
                     continue
+                kinds = (m.get("architecture") or {}).get("output_modalities")
+                if kinds is not None and not {"speech", "audio"} & set(kinds):
+                    continue  # a text or image model (the filter of the general list was not applied)
                 voices = m.get("supported_voices")
                 if voices is None:
                     for ep in m.get("endpoints") or []:
@@ -188,8 +193,10 @@ async def _speech_models(client: httpx.AsyncClient, base: str, headers: dict) ->
 
 
 async def _resolve_model(client: httpx.AsyncClient, base: str, headers: dict, force: bool = False) -> None:
-    if not force and _resolved["model"] and time.time() - _resolved["at"] < 6 * 3600:
-        return
+    now = time.time()
+    if not force and ((_resolved["model"] and now - _resolved["at"] < 6 * 3600) or now - _resolved.get("tried", 0.0) < 600):
+        return  # fresh, or the list could not be read a moment ago (do not ask again on every line)
+    _resolved["tried"] = now
     models = await _speech_models(client, base, headers)
     if not models:
         return
@@ -208,9 +215,21 @@ async def _resolve_model(client: httpx.AsyncClient, base: str, headers: dict, fo
         log.warning("TTS_MODEL %s is not offered; using %s", settings.tts_model, pick)
 
 
-async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
+def _endpoint() -> tuple[str, dict]:
     base = (settings.tts_base_url or settings.openrouter_base_url).rstrip("/")
     headers = {"Authorization": f"Bearer {settings.tts_key}", "X-Title": "GramSoul", "Content-Type": "application/json"}
+    return base, headers
+
+
+async def prepare_model() -> None:
+    """Finds out which speech model will be used (at most once in 6 hours; quietly keeps the old choice on errors)."""
+    base, headers = _endpoint()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        await _resolve_model(client, base, headers)
+
+
+async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
+    base, headers = _endpoint()
 
     def body_for() -> dict:
         v = voice

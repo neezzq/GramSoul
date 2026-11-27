@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -187,7 +188,8 @@ fun HomeScreen(nav: NavHostController) {
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = Fonar.Night,
     ) { pad ->
-        Box(Modifier.padding(pad).fillMaxSize()) {
+        // consumed: the profile tab has its own top bar, which must not add the status bar (and the bottom) a second time
+        Box(Modifier.padding(pad).consumeWindowInsets(pad).fillMaxSize()) {
             if (state.loading) CenterLoading()
             else androidx.compose.animation.AnimatedContent(
                 targetState = tab, label = "tabs",
