@@ -61,6 +61,23 @@ def save_image(db: Database, owner_id: int | None, data: bytes, w: int, h: int) 
     return iid
 
 
+# every place that points at a picture (see db.SCHEMA and MIGRATIONS)
+_IMAGE_REFS = (("stories", "cover_image_id"), ("characters", "avatar_image_id"), ("personas", "avatar_image_id"),
+               ("users", "avatar_image_id"), ("messages", "image_id"), ("image_jobs", "image_id"))
+
+
+def drop_unreferenced(db: Database, ids) -> list[str]:
+    """Deletes the rows of those pictures that nothing points at any more; returns their ids, whose files the
+    caller removes with delete_image_files after the transaction. Call inside a transaction."""
+    gone = []
+    for iid in sorted({i for i in ids if i}):
+        if any(db.one(f"SELECT 1 FROM {t} WHERE {c}=? LIMIT 1", (iid,)) for t, c in _IMAGE_REFS):
+            continue
+        db.run("DELETE FROM images WHERE id=?", (iid,))
+        gone.append(iid)
+    return gone
+
+
 def delete_image_files(ids) -> None:
     """Removes stored files (rows are deleted by the caller); missing files are fine."""
     for iid in ids:

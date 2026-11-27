@@ -720,8 +720,8 @@ def post_photo(db: Database, user: User, room, data: bytes, w: int, h: int, capt
     ts = now_ms()
     with db.tx():
         iid = save_image(db, user.id, data, w, h)
-        db.run("UPDATE images SET purpose='chat', expires_at=? WHERE id=?",
-               (ts + settings.chat_photo_ttl_days * 86_400_000, iid))
+        db.run("UPDATE images SET purpose='chat', created_at=?, expires_at=? WHERE id=?",  # one clock reading for both
+               (ts, ts + settings.chat_photo_ttl_days * 86_400_000, iid))
         mid = _append(db, room["id"], "player", user.id, None, hero_name, caption.strip()[:500],
                       client_id=client_id or None, image_id=iid)
     _notify_room(room["id"])

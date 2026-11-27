@@ -306,3 +306,47 @@ async def test_copies_of_a_public_story_are_reused_and_limited(client, monkeypat
     assert r.status_code == 200
     r = await play()
     assert r.status_code == 400 and r.json()["detail"]["code"] == "too_many_copies" and pics() == 3
+
+
+async def test_deleting_a_copy_frees_its_pictures_and_copies_per_day_are_limited(client, monkeypatch):
+    """A deleted story takes along the pictures nothing else uses (cover, portraits, scene pictures); deleting
+    copies does not reset the number of copies a player may start per day."""
+    import os
+    import app.main as main
+    from .test_api import wait_photo
+    from .test_admin import png
+    db = main.state.db
+    monkeypatch.setattr(main.settings, "rl_story_copies_per_day", 2)
+    ha, a = await register(client, "Автор")
+    hb, b = await register(client, "Игрок", ip="2.2.2.2")
+    img = (await client.post("/v1/images", files={"file": ("a.png", png(), "image/png")}, headers=ha)).json()
+    st = (await client.post("/v1/stories", json={**STORY, "cover_image_id": img["id"]}, headers=ha)).json()["story"]
+    await client.patch(f"/v1/stories/{st['id']}/visibility", json={"visibility": "public"}, headers=ha)
+    await asyncio.sleep(0.005)
+    exists = lambda iid: (db.one("SELECT 1 FROM images WHERE id=?", (iid,)) is not None,  # noqa: E731
+                          os.path.exists(os.path.join(main.settings.images_dir, iid + ".jpg")))
+    # a copy with its own cover and a scene picture
+    room = (await client.post(f"/v1/stories/{st['id']}/rooms", headers=hb)).json()["room"]
+    cover = room["story"]["cover_image_id"]
+    assert cover and cover != img["id"] and exists(cover) == (True, True)
+    await client.post(f"/v1/rooms/{room['id']}/photo", json={"client_id": cid(), "prompt": "трамвай в тумане"}, headers=hb)
+    s = await wait_photo(client, hb, room["id"])
+    scene = next(m["image_id"] for m in s["messages"] if m["image_id"])
+    assert exists(scene) == (True, True)
+    # the player deletes the copy: its pictures are gone, the author's original keeps its cover
+    assert (await client.delete(f"/v1/stories/{room['story']['id']}", headers=hb)).status_code == 200
+    assert exists(cover) == (False, False) and exists(scene) == (False, False)
+    assert exists(img["id"]) == (True, True)
+    assert (await client.get(f"/v1/stories/{st['id']}/images/{img['id']}", headers=hb)).status_code == 200
+    # starting again makes a new copy (the deleted one is not counted any more) — but only twice a day
+    r2 = (await client.post(f"/v1/stories/{st['id']}/rooms", headers=hb)).json()["room"]
+    await client.delete(f"/v1/stories/{r2['story']['id']}", headers=hb)
+    r = await client.post(f"/v1/stories/{st['id']}/rooms", headers=hb)
+    assert r.status_code == 429 and r.json()["detail"]["code"] == "rate_limited"
+    assert db.one("SELECT COUNT(*) n FROM stories s JOIN users u ON u.id=s.owner_id WHERE u.public_id=? AND s.is_demo=0",
+                  (b["user"]["id"],))["n"] == 0
+    # a picture used elsewhere stays: the author's cover is also their profile photo
+    await client.patch("/v1/me", json={"avatar_image_id": img["id"]}, headers=ha)
+    assert (await client.delete(f"/v1/stories/{st['id']}", headers=ha)).status_code == 200
+    assert exists(img["id"]) == (True, True)
+    assert (await client.get(f"/v1/users/{a['user']['id']}/avatar", headers=hb)).status_code == 200

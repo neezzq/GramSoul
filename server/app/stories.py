@@ -216,6 +216,12 @@ def own_copy(db: Database, user: User, src) -> Any:
     copies = db.one("SELECT COUNT(*) n FROM stories WHERE owner_id=? AND source_id IS NOT NULL", (user.id,))["n"]
     if copies >= MAX_STORY_COPIES:
         raise ApiError(400, "too_many_copies", "Слишком много копий чужих историй. Удали ненужные в «Мои истории».")
+    # copies made per day are limited too: deleting copies does not reset this count
+    from .ratelimit import limiter
+    wait = limiter.check(f"copy:{user.id}", settings.rl_story_copies_per_day, 86400)
+    if wait is not None:
+        raise ApiError(429, "rate_limited", "На сегодня лимит новых чужих историй исчерпан. Продолжи уже начатые "
+                                            "в «Мои истории» или попробуй завтра.", retry_after=wait)
     return clone_story(db, user, src)
 
 
@@ -431,10 +437,22 @@ def create_demo_story(db: Database, user: User) -> dict:
 
 
 def delete_story(db: Database, user: User, story_pid: str) -> None:
+    """Deletes the story with its scenes, and the pictures nothing else uses any more: the cover, the portraits,
+    the pictures of its scenes (a copy of someone else's story brings its own copies of the pictures)."""
+    from .images import delete_image_files, drop_unreferenced
     row = story_row(db, user, story_pid)
     with db.tx():
         room_ids = [r["id"] for r in db.all("SELECT id FROM rooms WHERE story_id=?", (row["id"],))]
-        db.run("DELETE FROM stories WHERE id=?", (row["id"],))
+        pics = {row["cover_image_id"]}
+        pics |= {c["avatar_image_id"] for c in db.all("SELECT avatar_image_id FROM characters WHERE story_id=?", (row["id"],))}
+        for rid in room_ids:
+            pics |= {m["image_id"] for m in db.all(
+                "SELECT image_id FROM messages WHERE room_id=? AND image_id IS NOT NULL", (rid,))}
+            pics |= {j["image_id"] for j in db.all(
+                "SELECT image_id FROM image_jobs WHERE room_id=? AND image_id IS NOT NULL", (rid,))}
+        db.run("DELETE FROM stories WHERE id=?", (row["id"],))  # cascades: characters, rooms, messages, jobs
+        gone = drop_unreferenced(db, pics)
+    delete_image_files(gone)
     for rid in room_ids:
         hub.notify(f"room:{rid}")
 
