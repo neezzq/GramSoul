@@ -110,7 +110,11 @@ async function loadUsers(body) {
     desc = sortKey === k ? !desc : true; sortKey = k; draw();
   } }, label)), h('th', null, ''));
   draw();
-  body.replaceChildren(totals, h('div', { class: 'a-wrap' }, h('table', { class: 'a-table', id: 'users-table' }, h('thead', null, head), tbody)));
+  // why the voice-over fails right now (key, balance, OpenRouter privacy settings) — players only see «недоступна»
+  const vp = d.voice_problem;
+  const voiceNote = vp ? h('div', { class: 'error', id: 'voice-problem', style: 'margin-top:12px' },
+    `Озвучка не работает (${date(vp.at)}): ${vp.text}`) : '';
+  body.replaceChildren(totals, voiceNote, h('div', { class: 'a-wrap' }, h('table', { class: 'a-table', id: 'users-table' }, h('thead', null, head), tbody)));
 }
 
 async function loadPhotos(body) {

@@ -202,6 +202,23 @@ def set_visibility(db: Database, user: User, story_pid: str, visibility: str) ->
     return story_dict(db, db.one("SELECT * FROM stories WHERE id=?", (row["id"],)), user=user)
 
 
+MAX_STORY_COPIES = 100  # copies of other players' stories one player may keep (each one copies its pictures)
+
+
+def own_copy(db: Database, user: User, src) -> Any:
+    """The player's copy of someone else's published story. A copy the player has not changed, made after the
+    last change of the original, is used again — so starting the same story many times does not fill the disk."""
+    same = db.one(
+        "SELECT * FROM stories WHERE owner_id=? AND source_id=? AND updated_at=created_at AND created_at>? "
+        "ORDER BY id DESC LIMIT 1", (user.id, src["id"], src["updated_at"]))
+    if same:
+        return same
+    copies = db.one("SELECT COUNT(*) n FROM stories WHERE owner_id=? AND source_id IS NOT NULL", (user.id,))["n"]
+    if copies >= MAX_STORY_COPIES:
+        raise ApiError(400, "too_many_copies", "Слишком много копий чужих историй. Удали ненужные в «Мои истории».")
+    return clone_story(db, user, src)
+
+
 def clone_story(db: Database, user: User, src) -> Any:
     """Another player starts a published story: they play their own private copy, which they may edit.
     Pictures are copied too, so the copy keeps working if the author deletes the original."""

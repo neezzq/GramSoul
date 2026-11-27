@@ -237,10 +237,72 @@ async def test_voice_over_through_http_picks_an_offered_model(client, monkeypatc
         monkeypatch.setattr(V, "_resolved", {"model": "openai/old-tts", "voices": None, "at": __import__("time").time()})
         r = await client.post("/v1/voice/preview", json={"voice": "nova", "text": "Другая фраза."}, headers=h)
         assert r.status_code == 200 and V.current_model() == "openai/gpt-4o-mini-tts"
-        # nothing offered at all: the player sees OpenRouter's own reason
+        # nothing offered at all: the player only learns that the voice-over is unavailable; OpenRouter's own
+        # reason (it may tell about the owner's account settings) goes to the admin page
         monkeypatch.setattr(mock_openrouter, "SPEECH_MODELS", [])
         monkeypatch.setattr(V, "_resolved", {"model": None, "voices": None, "at": 0.0})
         r = await client.post("/v1/voice/preview", json={"voice": "nova", "text": "Третья фраза."}, headers=h)
-        assert r.status_code == 502 and "does not exist" in r.json()["detail"]["message"]
+        msg = r.json()["detail"]["message"]
+        assert r.status_code == 502 and msg == V.UNAVAILABLE and "exist" not in msg and "OpenRouter" not in msg
+        from app.common import hash_password
+        monkeypatch.setattr(s, "admin_password_hash", hash_password("очень-секретно"))
+        ah = {"X-Admin-Token": (await client.post("/v1/admin/login", json={"password": "очень-секретно"})).json()["token"]}
+        problem = (await client.get("/v1/admin/users", headers=ah)).json()["voice_problem"]
+        assert "does not exist" in problem["text"] and problem["at"] > 0
+        # works again: the admin page no longer shows a problem
+        monkeypatch.setattr(mock_openrouter, "SPEECH_MODELS", [{"id": "openai/gpt-4o-mini-tts", "supported_voices": ["nova"]}])
+        monkeypatch.setattr(V, "_resolved", {"model": None, "voices": None, "at": 0.0})
+        r = await client.post("/v1/voice/preview", json={"voice": "nova", "text": "Четвёртая фраза."}, headers=h)
+        assert r.status_code == 200
+        assert (await client.get("/v1/admin/users", headers=ah)).json()["voice_problem"] is None
     finally:
         srv.shutdown()
+        V._last_problem.clear()
+
+
+async def test_copies_of_a_public_story_are_reused_and_limited(client, monkeypatch):
+    """Starting someone else's story again does not copy it (and its pictures) again, unless the player changed
+    their copy or the author changed the original; the number of copies is limited."""
+    import app.main as main
+    import app.stories as stories_mod
+    from .test_admin import png
+    db = main.state.db
+    ha, a = await register(client, "Автор")
+    hb, b = await register(client, "Игрок", ip="2.2.2.2")
+    img = (await client.post("/v1/images", files={"file": ("a.png", png(), "image/png")}, headers=ha)).json()
+    st = (await client.post("/v1/stories", json={**STORY, "cover_image_id": img["id"]}, headers=ha)).json()["story"]
+    await client.patch(f"/v1/stories/{st['id']}/visibility", json={"visibility": "public"}, headers=ha)
+    pics = lambda: db.one("SELECT COUNT(*) n FROM images i JOIN users u ON u.id=i.owner_id WHERE u.public_id=?",  # noqa: E731
+                          (b["user"]["id"],))["n"]
+    play = lambda: client.post(f"/v1/stories/{st['id']}/rooms", headers=hb)  # noqa: E731
+    await asyncio.sleep(0.005)
+    r1 = (await play()).json()["room"]
+    r2 = (await play()).json()["room"]
+    assert r1["story"]["id"] == r2["story"]["id"] and pics() == 1
+    # deleting the scene and starting again: still the same copy
+    await client.delete(f"/v1/rooms/{r1['id']}", headers=hb)
+    await client.delete(f"/v1/rooms/{r2['id']}", headers=hb)
+    r3 = (await play()).json()["room"]
+    assert r3["story"]["id"] == r1["story"]["id"] and pics() == 1
+    # the player changed their copy: the next start makes a fresh one, the changed copy stays as it is
+    char = r3["story"]["characters"][0]
+    await client.patch(f"/v1/stories/{r3['story']['id']}/characters/{char['id']}", json={"personality": "весёлый"}, headers=hb)
+    await asyncio.sleep(0.005)
+    r4 = (await play()).json()["room"]
+    assert r4["story"]["id"] != r3["story"]["id"] and pics() == 2
+    # the author changed the original: a fresh copy with the new text
+    orig = (await client.get(f"/v1/stories/{st['id']}", headers=ha)).json()["story"]
+    body = {**STORY, "cover_image_id": img["id"], "title": "Ночной трамвай 2",
+            "characters": [{**c, "id": orig["characters"][i]["id"]} for i, c in enumerate(STORY["characters"])]}
+    await asyncio.sleep(0.005)
+    assert (await client.put(f"/v1/stories/{st['id']}", json=body, headers=ha)).status_code == 200
+    await asyncio.sleep(0.005)
+    r5 = (await play()).json()["room"]
+    assert r5["story"]["id"] != r4["story"]["id"] and r5["story"]["title"] == "Ночной трамвай 2" and pics() == 3
+    # too many copies: refused before anything is copied
+    monkeypatch.setattr(stories_mod, "MAX_STORY_COPIES", 3)
+    c5 = r5["story"]["characters"][0]
+    r = await client.patch(f"/v1/stories/{r5['story']['id']}/characters/{c5['id']}", json={"personality": "грустный"}, headers=hb)
+    assert r.status_code == 200
+    r = await play()
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "too_many_copies" and pics() == 3

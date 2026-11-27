@@ -156,13 +156,14 @@ def create_room(db: Database, user: User, story_pid: str) -> dict:
     story = db.one("SELECT * FROM stories WHERE public_id=?", (story_pid,))
     if not story or (story["owner_id"] != user.id and story["visibility"] != "public"):
         raise not_found("История не найдена")
-    if story["owner_id"] != user.id:
-        # someone else's published story: the player gets their own copy (editable, the original stays as it is)
-        from .stories import clone_story
-        story = clone_story(db, user, story)
+    # the limit is checked before a copy is made: a refused scene must not leave a copied story with pictures behind
     count = db.one("SELECT COUNT(*) n FROM rooms WHERE owner_id=?", (user.id,))["n"]
     if count >= 200:
         raise ApiError(400, "too_many_rooms", "Слишком много сцен. Удали старые.")
+    if story["owner_id"] != user.id:
+        # someone else's published story: the player gets their own copy (editable, the original stays as it is)
+        from .stories import own_copy
+        story = own_copy(db, user, story)
     ts = now_ms()
     with db.tx():
         pid = new_id()

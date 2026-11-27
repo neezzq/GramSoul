@@ -252,21 +252,41 @@ async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
                 body.pop("instructions")  # a model without style instructions: plain voice
                 r = await client.post(base + "/audio/speech", json=body, headers=headers)
         except httpx.HTTPError as e:
-            raise ApiError(502, "voice_failed", f"Сервис озвучки не ответил ({type(e).__name__}). Попробуй ещё раз.")
-    if r.status_code == 401:
-        raise ApiError(502, "voice_key", "Сервис озвучки не принял ключ (TTS_API_KEY / OPENROUTER_API_KEY).")
-    if r.status_code == 402:
-        raise ApiError(502, "voice_balance", "На балансе OpenRouter не хватает денег на озвучку.")
+            _problem(f"сервис озвучки не ответил ({type(e).__name__})")
+            raise ApiError(502, "voice_failed", "Сервис озвучки не ответил. Попробуй ещё раз.")
     if r.status_code == 429:
         raise ApiError(429, "voice_busy", "Сервис озвучки занят. Попробуй через минуту.")
     if r.status_code >= 400:
+        # what exactly went wrong (key, balance, account privacy settings) is for the owner: the log and the
+        # admin page; the player only learns that the voice-over is unavailable
         log.warning("tts %s: %s", r.status_code, r.text[:1200])
-        raise ApiError(502, "voice_failed", f"Озвучка не получилась: {_error_text(r)} (ошибка {r.status_code}).")
+        if r.status_code == 401:
+            _problem("OpenRouter не принял ключ (TTS_API_KEY / OPENROUTER_API_KEY)")
+        elif r.status_code == 402:
+            _problem("на балансе OpenRouter не хватает денег на озвучку")
+        else:
+            _problem(f"{_error_text(r)} (ошибка {r.status_code})")
+        raise ApiError(502, "voice_failed", UNAVAILABLE)
     ctype = r.headers.get("content-type", "")
     if "json" in ctype or len(r.content) < 200:
         log.warning("tts unexpected answer %s: %s", ctype, r.text[:200])
-        raise ApiError(502, "voice_failed", "Сервис озвучки вернул не аудио.")
+        _problem(f"сервис озвучки вернул не аудио ({ctype or 'без типа'})")
+        raise ApiError(502, "voice_failed", UNAVAILABLE)
+    _last_problem.clear()
     return r.content
+
+
+UNAVAILABLE = "Озвучка сейчас недоступна. Попробуй позже."
+_last_problem: dict = {}
+
+
+def _problem(text: str) -> None:
+    _last_problem.update(at=int(time.time() * 1000), text=text)
+
+
+def last_problem() -> dict | None:
+    """The latest unresolved voice-over failure with its reason (for the admin page), or None."""
+    return dict(_last_problem) or None
 
 
 def clean_cache(max_age_days: int = 30) -> int:

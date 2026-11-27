@@ -975,7 +975,7 @@ async def admin_logout(request: Request, _: None = Depends(current_admin), d: Da
 
 @app.get("/v1/admin/users")
 async def admin_users(_: None = Depends(current_admin), d: Database = Depends(db)):
-    return A.users(d)
+    return {**A.users(d), "voice_problem": V.last_problem()}
 
 
 @app.delete("/v1/admin/users/{public_id}")

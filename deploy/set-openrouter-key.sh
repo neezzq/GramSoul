@@ -3,6 +3,7 @@
 # and restarts the API. The key is never put into the app.
 #   bash /opt/fonar/deploy/set-openrouter-key.sh
 set -euo pipefail
+umask 077  # .env and its temporary copy are readable by root only from the first byte
 cd "$(dirname "$0")"
 DC="docker compose"; docker compose version >/dev/null 2>&1 || DC="docker-compose"
 printf 'Вставь ключ OpenRouter (начинается с sk-or-) и нажми Enter.\nСимволы при вставке не отображаются — так и должно быть: '
@@ -13,16 +14,18 @@ KEY="$(echo "$KEY" | tr -d '[:space:]')"
 case "$KEY" in sk-or-*) ;; *) echo "Это не похоже на ключ OpenRouter (он начинается с sk-or-). Ничего не изменено."; exit 1 ;; esac
 
 echo "Проверяю ключ в OpenRouter…"
-CODE="$(curl -s -o /tmp/or-key.json -w '%{http_code}' -H "Authorization: Bearer $KEY" https://openrouter.ai/api/v1/key || true)"
+INFO="$(mktemp)"
+# the key goes to curl through stdin, not the command line (the process list shows arguments to every user)
+CODE="$(printf 'Authorization: Bearer %s\n' "$KEY" | curl -s -o "$INFO" -w '%{http_code}' -H @- https://openrouter.ai/api/v1/key || true)"
 if [ "$CODE" != "200" ]; then
-  echo "OpenRouter не принял ключ (HTTP $CODE). Проверь, что скопировал его целиком."; rm -f /tmp/or-key.json; exit 1
+  echo "OpenRouter не принял ключ (HTTP $CODE). Проверь, что скопировал его целиком."; rm -f "$INFO"; exit 1
 fi
-python3 - <<'PY' 2>/dev/null || true
-import json
-d = json.load(open("/tmp/or-key.json")).get("data", {})
+python3 - "$INFO" <<'PY' 2>/dev/null || true
+import json, sys
+d = json.load(open(sys.argv[1])).get("data", {})
 print(f"Ключ рабочий. Лимит: {d.get('limit')}, потрачено: {d.get('usage')}")
 PY
-rm -f /tmp/or-key.json
+rm -f "$INFO"
 
 touch .env
 grep -v '^OPENROUTER_API_KEY=' .env > .env.tmp || true

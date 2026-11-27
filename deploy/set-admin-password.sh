@@ -2,6 +2,7 @@
 # Sets the password of the admin page https://<domain>/admin/ (users, spent tokens, players' photos).
 # Only a scrypt hash is stored in deploy/.env (root-only); the password itself is never written anywhere.
 set -euo pipefail
+umask 077  # .env and its temporary copy are readable by root only from the first byte
 cd "$(dirname "$0")"
 DC="docker compose"; docker compose version >/dev/null 2>&1 || DC="docker-compose"
 read -rsp "Пароль для админки (не короче 10 символов): " P1; echo
