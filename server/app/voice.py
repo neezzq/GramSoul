@@ -16,6 +16,7 @@ import httpx
 
 from .common import ApiError
 from .config import settings
+from .crypto import read_sealed, write_sealed
 
 log = logging.getLogger("fonar.voice")
 
@@ -120,9 +121,9 @@ async def synthesize(text: str, spec: VoiceSpec, narrator: bool = False) -> Spee
     if settings.llm_backend != "fake":
         await prepare_model()  # the cache key names the model that will actually speak
     path = cache_path(current_model(), spec, instr, text)
+    name = os.path.basename(path)[:-4]
     try:
-        with open(path, "rb") as f:
-            return SpeechResult(f.read(), 0, cached=True)
+        return SpeechResult(read_sealed(path, name), 0, cached=True)
     except OSError:
         pass
     if settings.llm_backend == "fake":
@@ -130,10 +131,7 @@ async def synthesize(text: str, spec: VoiceSpec, narrator: bool = False) -> Spee
     else:
         data = await _openrouter_speech(text, spec.voice, instr)
     os.makedirs(_cache_dir(), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, path)
+    write_sealed(path, data, name)  # the lines of a private chat: encrypted at rest (DATA_KEY)
     return SpeechResult(data, len(text), cost=len(text) / 1_000_000 * settings.tts_usd_per_mchar)
 
 

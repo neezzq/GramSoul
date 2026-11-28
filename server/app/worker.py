@@ -73,6 +73,8 @@ class Worker:
                 if time.monotonic() - last_cleanup > 3600:  # hourly: players' photos older than a week
                     last_cleanup = time.monotonic()
                     expire_chat_photos(self.db)
+                    from .common import drop_idle_sessions
+                    drop_idle_sessions(self.db)
                     from .voice import clean_cache
                     await asyncio.to_thread(clean_cache)
                 picked = self._next_job()

@@ -5,6 +5,9 @@ on:
     paths: ["server/**", "deploy/**", "tools/mock_openrouter.py", ".github/workflows/backend.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,6 +20,10 @@ jobs:
         run: |
           pip install -q -r requirements-dev.txt
           pytest -q
+      - name: The same tests with encryption at rest (SQLCipher database, encrypted pictures and audio)
+        working-directory: server
+        run: |
+          DATA_KEY="$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" pytest -q
 
   two-players:
     # Two simulated players and a third account through the real HTTP API; the AI is a local
@@ -32,6 +39,8 @@ jobs:
           pip install -q -r server/requirements.txt
           nohup python3 tools/mock_openrouter.py 9009 > /tmp/mock.log 2>&1 &
           mkdir -p /tmp/data
+          # like production: data encrypted at rest
+          export DATA_KEY="$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
           (cd server && DATA_DIR=/tmp/data OPENROUTER_API_KEY=sk-or-mock OPENROUTER_BASE_URL=http://127.0.0.1:9009/api/v1 \
              nohup uvicorn app.main:app --port 8000 > /tmp/api.log 2>&1 &)
           for i in $(seq 1 30); do curl -fs localhost:8000/v1/health && break; sleep 1; done

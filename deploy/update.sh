@@ -11,6 +11,8 @@ if [ "${FONAR_UPDATED:-}" != 1 ]; then
   # continue with the freshly pulled version of this very script
   FONAR_UPDATED=1 exec bash "$0" "$@"
 fi
+bash ensure-data-key.sh  # encryption at rest: created once; the API encrypts the existing data on its next start
+mkdir -p backups && chmod 700 data/api backups && chmod 600 backups/* 2>/dev/null || true  # older copies too
 $DC up -d --build --remove-orphans
 # Caddyfile is a bind mount: apply its changes without dropping connections
 $DC exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || $DC restart caddy

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Restore from an archive made by backup.sh:  bash restore.sh backups/fonar-YYYYmmdd-HHMMSS.tar.gz
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")"
 [ -f "${1:-}" ] || { echo "usage: bash restore.sh backups/fonar-....tar.gz"; exit 1; }
 DC="docker compose"; docker compose version >/dev/null 2>&1 || DC="docker-compose"

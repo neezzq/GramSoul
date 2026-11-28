@@ -7,20 +7,19 @@ import io
 import logging
 import os
 import secrets
-import sqlite3
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from . import admin as A, llm, nick as nickmod, personas as PS, rooms as R, stories as S, usage, voice as V
-from .common import (ApiError, User, auth_user, client_ip, hash_password, hash_token, hub, new_id, new_token, not_found,
+from . import admin as A, crypto, llm, nick as nickmod, personas as PS, rooms as R, stories as S, usage, voice as V
+from .common import (ApiError, User, auth_user, client_ip, hash_password, request_token, hash_token, hub, new_id, new_token, not_found,
                      verify_password)
 from .config import settings
-from .db import Database, now_ms
-from .images import process_image, save_image
+from .db import INTEGRITY_ERRORS, Database, now_ms
+from .images import process_image, read_image, save_image
 from .ratelimit import limiter
 from .worker import Worker
 
@@ -36,10 +35,20 @@ class State:
 state = State()
 
 
+async def _encrypt_old_files() -> None:
+    try:
+        await asyncio.to_thread(crypto.migrate_files, settings.images_dir, ".jpg")
+        await asyncio.to_thread(crypto.migrate_files, os.path.join(settings.data_dir, "voice"), ".mp3")
+    except Exception:  # never take the API down: the files stay readable as they are
+        log.exception("encrypting stored files failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(settings.images_dir, exist_ok=True)
-    state.db = Database(settings.db_path)
+    state.db = Database(settings.db_path, crypto.db_key_hex())
+    # files stored before encryption was switched on are encrypted in place, in the background
+    files = asyncio.create_task(_encrypt_old_files())
     PS.seed_demo(state.db)
     state.worker = Worker(state.db)
     state.worker.start()
@@ -47,6 +56,7 @@ async def lifespan(app: FastAPI):
         state.db.run("UPDATE rooms SET ai_mode='cloud' WHERE ai_mode<>'cloud'")
     warm = asyncio.create_task(llm.warmup()) if settings.local_ai else None
     yield
+    files.cancel()
     if warm:
         warm.cancel()
     await state.worker.stop()
@@ -64,9 +74,12 @@ async def _validation(request: Request, exc: RequestValidationError):
                                                              "message": f"Некорректные данные ({loc})."}})
 
 
-@app.exception_handler(sqlite3.IntegrityError)
-async def _integrity(request: Request, exc: sqlite3.IntegrityError):
+async def _integrity(request: Request, exc: Exception):
     return JSONResponse(status_code=409, content={"detail": {"code": "conflict", "message": "Конфликт данных, повтори."}})
+
+
+for _err in INTEGRITY_ERRORS:  # sqlite3 and SQLCipher have their own exception classes
+    app.add_exception_handler(_err, _integrity)
 
 
 async def db() -> Database:
@@ -104,7 +117,7 @@ class RegisterIn(BaseModel):
     password: str | None = Field(default=None, max_length=200)  # older app versions register without one
 
 
-PASSWORD_MIN = 6
+PASSWORD_MIN = 8  # new and changed passwords; older shorter ones still work
 
 
 def _check_password(pw: str) -> str:
@@ -139,7 +152,7 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
                         (new_id(), nick, key, pw_hash, ts))
             d.run("INSERT INTO sessions(token_hash, user_id, created_at, last_seen_at) VALUES(?,?,?,?)",
                   (hash_token(token), cur.lastrowid, ts, ts))
-    except sqlite3.IntegrityError:
+    except INTEGRITY_ERRORS:
         raise ApiError(409, "nick_taken", "Этот ник уже занят. Придумай другой.")
     u = d.one("SELECT * FROM users WHERE id=?", (cur.lastrowid,))
     user = User(u["id"], u["public_id"], u["nick"])
@@ -228,15 +241,20 @@ class PasswordIn(BaseModel):
 
 
 @app.post("/v1/me/password")
-async def set_password(body: PasswordIn, user: User = Depends(current_user), d: Database = Depends(db)):
-    """First password for an existing account, or a change (then the old one is needed)."""
+async def set_password(body: PasswordIn, request: Request, user: User = Depends(current_user), d: Database = Depends(db)):
+    """First password for an existing account, or a change (then the old one is needed). A change signs out
+    every other device: whoever may have learnt the old password loses their session too."""
     rate(f"pw:{user.id}", 10, 3600, "Слишком много попыток. Попробуй позже.")
     row = _me_row(d, user.id)
     if row["password_hash"]:
         if not body.old_password or not await asyncio.to_thread(verify_password, body.old_password, row["password_hash"]):
             raise ApiError(400, "bad_old_password", "Старый пароль неверный.")
     new_hash = await asyncio.to_thread(hash_password, _check_password(body.password))
-    d.run("UPDATE users SET password_hash=? WHERE id=?", (new_hash, user.id))
+    with d.tx():
+        d.run("UPDATE users SET password_hash=? WHERE id=?", (new_hash, user.id))
+        if row["password_hash"]:  # a change (the very first password of an old account signs nobody out)
+            d.run("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (user.id, hash_token(request_token(request))))
+            d.run("UPDATE transfer_codes SET used_at=? WHERE user_id=? AND used_at IS NULL", (now_ms(), user.id))
     return {"user": _me_dict(_me_row(d, user.id))}
 
 
@@ -281,7 +299,7 @@ async def update_me(body: ProfileIn, user: User = Depends(current_user), d: Data
                 with d.tx():
                     d.run("UPDATE users SET nick=?, nick_key=? WHERE id=?", (nick, key, user.id))
                     rooms = R.rename_player(d, user.id, user.nick, nick)
-            except sqlite3.IntegrityError:
+            except INTEGRITY_ERRORS:
                 raise ApiError(409, "nick_taken", "Этот ник уже занят. Придумай другой.")
             for rid in rooms:
                 hub.notify(f"room:{rid}")
@@ -354,9 +372,23 @@ async def login_with_transfer_code(body: TransferLoginIn, request: Request, d: D
 
 @app.post("/v1/logout")
 async def logout(request: Request, user: User = Depends(current_user), d: Database = Depends(db)):
-    token = request.headers.get("authorization", "")[7:].strip()
-    d.run("DELETE FROM sessions WHERE token_hash=?", (hash_token(token),))
+    d.run("DELETE FROM sessions WHERE token_hash=?", (hash_token(request_token(request)),))
     return {"ok": True}
+
+
+@app.get("/v1/me/sessions")
+async def my_sessions(user: User = Depends(current_user), d: Database = Depends(db)):
+    """How many devices are signed in to this account (this one included)."""
+    return {"count": d.one("SELECT COUNT(*) n FROM sessions WHERE user_id=?", (user.id,))["n"]}
+
+
+@app.post("/v1/logout/others")
+async def logout_others(request: Request, user: User = Depends(current_user), d: Database = Depends(db)):
+    """Signs out every other device (a lost phone, a computer of a friend); this one stays signed in."""
+    n = d.run("DELETE FROM sessions WHERE user_id=? AND token_hash<>?",
+              (user.id, hash_token(request_token(request)))).rowcount
+    d.run("UPDATE transfer_codes SET used_at=? WHERE user_id=? AND used_at IS NULL", (now_ms(), user.id))
+    return {"ok": True, "signed_out": n}
 
 
 # ---------------------------------------------------------------------------
@@ -571,11 +603,11 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(curren
     return {"id": iid, "width": w, "height": h}
 
 
-def _image_response(iid: str) -> FileResponse:
-    path = os.path.join(settings.images_dir, iid + ".jpg")
-    if not os.path.exists(path):
+def _image_response(iid: str) -> Response:
+    data = read_image(iid)  # decrypted here: the file on disk is encrypted
+    if data is None:
         raise not_found("Изображение не найдено")
-    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.get("/v1/images/{iid}")

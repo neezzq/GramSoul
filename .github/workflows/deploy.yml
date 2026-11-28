@@ -2,7 +2,9 @@ name: Deploy to VPS
 
 # Runs deploy/install.sh on the VPS over SSH, then checks the public HTTPS API
 # with the two-player end-to-end script.
-# Secrets: VPS_HOST, VPS_PASSWORD (or VPS_SSH_KEY), optional VPS_USER (default root), VPS_PORT.
+# Secrets: VPS_HOST, VPS_PASSWORD (or VPS_SSH_KEY), optional VPS_USER (default root), VPS_PORT,
+# VPS_HOST_KEY — the server's SSH host key line(s) (on the VPS: ssh-keyscan -p 22 localhost, replace "localhost"
+# with VPS_HOST). With it the runner refuses to talk to anything that only pretends to be the server.
 # Optional repository variable DOMAIN (otherwise <ip>.sslip.io is used).
 on:
   workflow_dispatch:
@@ -14,6 +16,9 @@ on:
   # editing deploy/DEPLOY_REQUEST (e.g. a new date) also starts a deploy
   push:
     paths: ["deploy/DEPLOY_REQUEST"]
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
@@ -30,11 +35,20 @@ jobs:
           PORT: ${{ secrets.VPS_PORT || '22' }}
           SSHPASS: ${{ secrets.VPS_PASSWORD }}
           KEY: ${{ secrets.VPS_SSH_KEY }}
+          HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
           DOMAIN: ${{ vars.DOMAIN }}
         run: |
           test -n "$HOST" || { echo "::error::secret VPS_HOST is not set"; exit 1; }
           sudo apt-get install -y -qq sshpass >/dev/null
-          SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -p $PORT"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          if [ -n "$HOST_KEY" ]; then
+            printf '%s\n' "$HOST_KEY" > ~/.ssh/known_hosts
+            CHECK="StrictHostKeyChecking=yes"
+          else
+            echo "::warning::secret VPS_HOST_KEY is not set: the server's SSH key is not checked (see the comment at the top)"
+            CHECK="StrictHostKeyChecking=accept-new"
+          fi
+          SSH_OPTS="-o $CHECK -o ServerAliveInterval=30 -p $PORT"
           if [ -n "$KEY" ]; then
             mkdir -p ~/.ssh && echo "$KEY" > ~/.ssh/id && chmod 600 ~/.ssh/id
             RUN="ssh -i $HOME/.ssh/id $SSH_OPTS $USER_@$HOST"

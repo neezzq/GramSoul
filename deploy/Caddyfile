@@ -5,7 +5,12 @@
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
 		-Server
+		-X-Powered-By
 	}
 
 	handle /v1/* {
@@ -29,6 +34,10 @@
 		Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 		X-Frame-Options "DENY"
 	}
+
+	# the landing page: no scripts at all
+	@landing not path /v1/* /app/* /admin/*
+	header @landing Content-Security-Policy "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 	# installable APK + a tiny landing page for friends
 	@apk path *.apk

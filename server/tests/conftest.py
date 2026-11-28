@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import os
 import tempfile
 
@@ -12,13 +13,13 @@ os.environ.setdefault("CLOUD_RECENT_MESSAGES", "10")  # keeps summary tests shor
 os.environ.setdefault("DEMO_CONTENT", "on")  # sample characters and story (production has none)
 
 
-@pytest_asyncio.fixture
-async def client():
+@contextlib.asynccontextmanager
+async def make_client(data_dir: str | None = None):
+    """A test client of the API on its own data directory (a fresh one unless given)."""
     import httpx
     from asgi_lifespan import LifespanManager
 
-    tmp = tempfile.mkdtemp()
-    os.environ["DATA_DIR"] = tmp
+    os.environ["DATA_DIR"] = data_dir or tempfile.mkdtemp()
     from app import config
 
     config.reload_settings()
@@ -43,6 +44,12 @@ async def client():
             yield c
 
 
+@pytest_asyncio.fixture
+async def client():
+    async with make_client() as c:
+        yield c
+
+
 async def register(client, nick, ip="1.1.1.1"):
     r = await client.post("/v1/register", json={"nick": nick}, headers={"x-forwarded-for": ip})
     assert r.status_code == 201, r.text
@@ -62,3 +69,12 @@ async def wait_generation(client, h, room_id, timeout=10.0, statuses=("done", "f
                 return r.json()
         await asyncio.sleep(0.05)
     raise AssertionError("generation did not finish")
+
+
+def stored_prompt(room_pid: str) -> str:
+    """The latest prompt sent to the model for a room, read from the database (the API shows it only to the
+    author of every character in the room)."""
+    import app.main as main
+    rid = main.state.db.one("SELECT id FROM rooms WHERE public_id=?", (room_pid,))["id"]
+    return main.state.db.one("SELECT prompt FROM generations WHERE room_id=? AND prompt IS NOT NULL AND kind<>'summary' "
+                             "ORDER BY id DESC LIMIT 1", (rid,))["prompt"]

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 
 from fastapi import HTTPException, Request
 
+from . import config
 from .db import Database, now_ms
 
 
@@ -76,6 +77,17 @@ class User:
     nick: str
 
 
+def request_token(request: Request) -> str:
+    """The session token of this request (already checked by auth_user)."""
+    return request.headers.get("authorization", "")[7:].strip()
+
+
+def drop_idle_sessions(db: Database) -> int:
+    """Sessions unused for SESSION_IDLE_DAYS are removed (they would be refused anyway)."""
+    cutoff = now_ms() - config.settings.session_idle_days * 86_400_000
+    return db.run("DELETE FROM sessions WHERE last_seen_at<?", (cutoff,)).rowcount
+
+
 def auth_user(db: Database, request: Request) -> User:
     header = request.headers.get("authorization", "")
     if not header.lower().startswith("bearer "):
@@ -91,6 +103,9 @@ def auth_user(db: Database, request: Request) -> User:
     if not row:
         raise ApiError(401, "invalid_session", "Сессия недействительна.")
     ts = now_ms()
+    if ts - row["last_seen_at"] > config.settings.session_idle_days * 86_400_000:
+        db.run("DELETE FROM sessions WHERE token_hash=?", (hash_token(token),))
+        raise ApiError(401, "session_expired", "Сессия истекла: тебя долго не было. Войди снова по нику и паролю.")
     if ts - row["last_seen_at"] > 60_000:
         db.run("UPDATE sessions SET last_seen_at=? WHERE token_hash=?", (ts, hash_token(token)))
     return User(row["id"], row["public_id"], row["nick"])

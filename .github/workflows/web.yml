@@ -7,6 +7,9 @@ on:
     paths: ["deploy/site/**", "server/**", "tools/web_dev.py", "tools/web_e2e.js", ".github/workflows/web.yml"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   web:
     runs-on: ubuntu-latest

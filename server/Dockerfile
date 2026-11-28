@@ -10,4 +10,5 @@ ENV DATA_DIR=/data
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/v1/health',timeout=4)"
 # One process on purpose: the generation queue and long-poll hub live in memory.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*", "--workers", "1", "--timeout-keep-alive", "75"]
+# umask 077: the database, pictures and audio the API writes are readable by its own user only
+CMD ["sh", "-c", "umask 077 && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*' --workers 1 --timeout-keep-alive 75 --no-server-header"]

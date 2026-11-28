@@ -6,10 +6,22 @@ single, well-defined server order (this is what gives chat messages their
 ``seq``)."""
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import time
 from typing import Any, Iterable
+
+log = logging.getLogger("fonar.db")
+
+# the encrypted database uses SQLCipher (same API as sqlite3, its own exception classes)
+try:
+    from sqlcipher3 import dbapi2 as _sqlcipher
+except ImportError:  # pragma: no cover - only without the package (then DATA_KEY can not be used)
+    _sqlcipher = None
+INTEGRITY_ERRORS: tuple[type[Exception], ...] = (sqlite3.IntegrityError,) + (
+    (_sqlcipher.IntegrityError,) if _sqlcipher is not None else ())
+_PLAIN_HEADER = b"SQLite format 3\x00"
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -346,13 +358,81 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _is_plain(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return f.read(16) == _PLAIN_HEADER
+    except OSError:
+        return False
+
+
+def _key_pragma(key_hex: str) -> str:
+    return f"PRAGMA key = \"x'{key_hex}'\""  # a raw 256-bit key: no passphrase derivation needed
+
+
+def encrypt_existing(path: str, key_hex: str) -> None:
+    """Turns an unencrypted database file into an encrypted one, in place. The copy is checked (every table has
+    the same number of rows, integrity_check passes) before it replaces the original; if anything goes wrong the
+    original stays untouched and the error is raised."""
+    tmp = path + ".enc-tmp"
+    for f in (tmp, tmp + "-wal", tmp + "-shm", tmp + "-journal"):
+        if os.path.exists(f):
+            os.remove(f)
+    src = _sqlcipher.connect(path, isolation_level=None)
+    try:
+        src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        version = int(src.execute("PRAGMA user_version").fetchone()[0])
+        tables = [r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+        counts = {t: src.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] for t in tables}
+        src.execute(f"ATTACH DATABASE ? AS enc KEY \"x'{key_hex}'\"", (tmp,))
+        src.execute("SELECT sqlcipher_export('enc')")
+        src.execute(f"PRAGMA enc.user_version={version}")
+        src.execute("DETACH DATABASE enc")
+    finally:
+        src.close()
+    chk = _sqlcipher.connect(tmp, isolation_level=None)
+    try:
+        chk.execute(_key_pragma(key_hex))
+        same = all(chk.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0] == n for t, n in counts.items())
+        healthy = chk.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    finally:
+        chk.close()
+    if not (same and healthy):
+        os.remove(tmp)
+        raise RuntimeError("encrypting the database failed the check; the unencrypted database is left as it was")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+    for f in (path + "-wal", path + "-shm"):
+        if os.path.exists(f):
+            os.remove(f)
+    log.warning("the database is now encrypted (%d tables, %d rows)", len(counts), sum(counts.values()))
+
+
 class Database:
-    def __init__(self, path: str):
+    def __init__(self, path: str, key_hex: str | None = None):
+        """``key_hex``: the SQLCipher key (crypto.db_key_hex()); None keeps the file unencrypted."""
         self.path = path
+        self._key_hex = key_hex
         if path != ":memory:":
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        self.conn = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row
+        driver = sqlite3
+        if key_hex:
+            if _sqlcipher is None:
+                raise RuntimeError("DATA_KEY is set, but the sqlcipher3 package is missing")
+            driver = _sqlcipher
+            if path != ":memory:" and _is_plain(path):
+                encrypt_existing(path, key_hex)
+        elif path != ":memory:" and os.path.exists(path) and os.path.getsize(path) > 0 and not _is_plain(path):
+            raise RuntimeError("the database is encrypted: set DATA_KEY in deploy/.env (the key it was encrypted with)")
+        self.conn = driver.connect(path, isolation_level=None, check_same_thread=False)
+        self.conn.row_factory = driver.Row
+        if key_hex:
+            self.conn.execute(_key_pragma(key_hex))
+            try:
+                self.conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+            except _sqlcipher.DatabaseError:
+                self.conn.close()
+                raise RuntimeError("DATA_KEY does not open this database (a different key was used to encrypt it)")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
@@ -380,6 +460,26 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    def backup_to(self, dest: str) -> None:
+        """A consistent copy of the database at ``dest``, encrypted with the same key if this one is."""
+        if os.path.exists(dest):
+            os.remove(dest)
+        if self._key_hex:
+            self.conn.execute(f"ATTACH DATABASE ? AS bak KEY \"x'{self._key_hex}'\"", (dest,))
+            try:
+                self.conn.execute("SELECT sqlcipher_export('bak')")
+                version = int(self.conn.execute("PRAGMA user_version").fetchone()[0])
+                self.conn.execute(f"PRAGMA bak.user_version={version}")
+            finally:
+                self.conn.execute("DETACH DATABASE bak")
+        else:
+            dst = sqlite3.connect(dest)
+            try:
+                self.conn.backup(dst)
+            finally:
+                dst.close()
+        os.chmod(dest, 0o600)
 
 
 class _Tx:

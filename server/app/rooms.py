@@ -538,6 +538,9 @@ def sync_payload(db: Database, user: User, room, since: int) -> dict:
 
 def last_prompt(db: Database, user: User, room_pid: str) -> dict:
     room = member_room(db, user, room_pid)
+    # the prompt holds the hidden part of a character card (backstory, personality): only its author may read it
+    if room["story_id"] is None and any(p["author_id"] != user.id for p in room_personas(db, room)):
+        raise ApiError(403, "prompt_hidden", "Запрос к ИИ скрыт: в нём закрытое описание чужого персонажа.")
     g = db.one("SELECT * FROM generations WHERE room_id=? AND prompt IS NOT NULL AND kind<>'summary' ORDER BY id DESC LIMIT 1",
                (room["id"],))
     if not g:

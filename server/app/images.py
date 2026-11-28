@@ -5,8 +5,15 @@ import io
 import os
 
 from .common import new_id
+from .crypto import read_sealed, write_sealed
 from .config import settings
 from .db import Database, now_ms
+
+
+# what a picture may be (other formats are refused: less parser surface) and how big it may be once decoded —
+# a small file can declare a huge canvas ("decompression bomb") and take all the memory of the API
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "GIF"}
+MAX_PIXELS = 16_000_000  # after JPEG draft scaling: ~64 MB as RGBA
 
 
 def process_image(raw: bytes, max_side: int = 1280, crop: tuple[int, int] | None = None) -> tuple[bytes, int, int]:
@@ -14,7 +21,11 @@ def process_image(raw: bytes, max_side: int = 1280, crop: tuple[int, int] | None
     crop=(2, 3) centre-crops to that width:height ratio (portrait avatars)."""
     from PIL import Image, ImageOps
 
-    img = Image.open(io.BytesIO(raw))
+    img = Image.open(io.BytesIO(raw), formats=sorted(ALLOWED_FORMATS))
+    if img.format == "JPEG":
+        img.draft("RGB", (max_side, max_side))  # decode big photos at a reduced scale (fast, little memory)
+    if img.width * img.height > MAX_PIXELS:
+        raise ValueError(f"image too large: {img.width}x{img.height}")
     img.load()
     img = ImageOps.exif_transpose(img)
     if img.mode != "RGB":
@@ -45,8 +56,7 @@ def read_image(iid: str) -> bytes | None:
     if not iid or "/" in iid or ".." in iid:
         return None
     try:
-        with open(os.path.join(settings.images_dir, iid + ".jpg"), "rb") as f:
-            return f.read()
+        return read_sealed(os.path.join(settings.images_dir, iid + ".jpg"), iid)
     except OSError:
         return None
 
@@ -54,8 +64,7 @@ def read_image(iid: str) -> bytes | None:
 def save_image(db: Database, owner_id: int | None, data: bytes, w: int, h: int) -> str:
     iid = new_id(16)
     os.makedirs(settings.images_dir, exist_ok=True)
-    with open(os.path.join(settings.images_dir, iid + ".jpg"), "wb") as f:
-        f.write(data)
+    write_sealed(os.path.join(settings.images_dir, iid + ".jpg"), data, iid)  # encrypted at rest (DATA_KEY)
     db.run("INSERT INTO images(id, owner_id, mime, size, width, height, created_at) VALUES(?,?,?,?,?,?,?)",
            (iid, owner_id, "image/jpeg", len(data), w, h, now_ms()))
     return iid

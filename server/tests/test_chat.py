@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from .conftest import register, wait_generation
+from .conftest import register, stored_prompt, wait_generation
 
 pytestmark = pytest.mark.asyncio
 
@@ -48,7 +48,12 @@ async def test_chat_starts_with_greeting_and_replies_as_character(client):
     assert [m["kind"] for m in msgs] == ["character", "player", "character"]
     assert msgs[1]["speaker_name"] == "Mira" and msgs[2]["speaker_name"] == "Ян Корсак" and msgs[2]["character_id"] == p["id"]
     # what the model saw: the character's hidden card, the style rules, the greeting as its own line
-    lp = (await client.get(f"/v1/rooms/{room['id']}/last-prompt", headers=h)).json()
+    import app.main as main
+    rid = main.state.db.one("SELECT id FROM rooms WHERE public_id=?", (room["id"],))["id"]
+    lp = dict(main.state.db.one("SELECT prompt FROM generations WHERE room_id=? AND prompt IS NOT NULL ORDER BY id DESC LIMIT 1", (rid,)))
+    # the player is not the author of this character: the prompt (with its hidden card) is not shown to them
+    r = await client.get(f"/v1/rooms/{room['id']}/last-prompt", headers=h)
+    assert r.status_code == 403 and r.json()["detail"]["code"] == "prompt_hidden"
     assert "Ты — Ян Корсак" in lp["prompt"] and "Предыстория:" in lp["prompt"] and "в *звёздочках*" in lp["prompt"]
     assert "<assistant>\n" + p["first_message"][:30] in lp["prompt"] and "Mira" in lp["prompt"]
     # the room shows up in the list with the character's name
@@ -85,7 +90,7 @@ async def test_chat_regenerate_continue_and_edit(client):
     assert r.json()["message"]["text"] == "*кивает* — Поправлено."
     await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Дальше"}, headers=h)
     await wait_generation(client, h, rid)
-    lp = (await client.get(f"/v1/rooms/{rid}/last-prompt", headers=h)).json()["prompt"]
+    lp = stored_prompt(rid)
     assert "МАРКЕР" in lp and "Поправлено" in lp
     # strangers can not see or edit anything
     assert (await client.patch(f"/v1/rooms/{rid}/messages/{mine['id']}", json={"text": "x"}, headers=hb)).status_code == 404
@@ -132,7 +137,7 @@ async def test_chat_photo_and_summary_memory(client):
     assert d["summary"], "summary was not produced"
     await client.post(f"/v1/rooms/{rid}/messages", json={"client_id": cid(), "text": "Финал"}, headers=h)
     await wait_generation(client, h, rid)
-    assert "Что было раньше:" in (await client.get(f"/v1/rooms/{rid}/last-prompt", headers=h)).json()["prompt"]
+    assert "Что было раньше:" in stored_prompt(rid)
 
 
 async def test_chat_access_rules(client):

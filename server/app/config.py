@@ -27,6 +27,9 @@ def _float(name: str, default: float) -> float:
 @dataclass
 class Settings:
     data_dir: str = field(default_factory=lambda: _env("DATA_DIR", "/data"))
+    # master key of the encryption at rest (database, pictures, voice-over audio): 32 random bytes, base64.
+    # Set by install.sh / update.sh; empty = unencrypted (tests, local development). See app/crypto.py.
+    data_key: str = field(default_factory=lambda: _env("DATA_KEY", ""))
 
     # --- LLM (Ollama) ---
     ollama_url: str = field(default_factory=lambda: _env("OLLAMA_URL", "http://ollama:11434"))
@@ -74,6 +77,8 @@ class Settings:
     transfer_code_ttl_s: int = field(default_factory=lambda: _int("TRANSFER_CODE_TTL_S", 600))
     transfer_code_attempts: int = 5
     online_window_s: int = field(default_factory=lambda: _int("ONLINE_WINDOW_S", 180))
+    # a session not used for this many days stops working (a lost or stolen phone is signed out by itself)
+    session_idle_days: int = field(default_factory=lambda: _int("SESSION_IDLE_DAYS", 90))
     about_max_chars: int = 300
     # the small local model (Ollama) is off by default: every room uses the cloud model
     local_ai: bool = field(default_factory=lambda: _env("LOCAL_AI", "off").lower() in ("1", "on", "true", "yes"))

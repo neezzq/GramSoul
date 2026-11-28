@@ -159,6 +159,9 @@ class Api(
         post("/v1/me/password", PasswordReq(password, old))
     suspend fun me(): MeRes = get("/v1/me")
     suspend fun logout(): OkRes = postEmpty("/v1/logout")
+    suspend fun sessions(): SessionsRes = get("/v1/me/sessions")
+    /** Signs out every other device; this one stays signed in. */
+    suspend fun logoutOthers(): LogoutOthersRes = postEmpty("/v1/logout/others")
     suspend fun setAbout(about: String): MeRes = patch("/v1/me", AboutReq(about))
     suspend fun setNick(nick: String): MeRes = patch("/v1/me", NickReq(nick))
     suspend fun setGender(gender: String): MeRes = patch("/v1/me", GenderReq(gender))

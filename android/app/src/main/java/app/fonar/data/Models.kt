@@ -339,6 +339,13 @@ data class LastPromptRes(
 @Serializable
 data class OkRes(val ok: Boolean = true)
 
+/** How many devices are signed in to this account (this one included). */
+@Serializable
+data class SessionsRes(val count: Int = 1)
+
+@Serializable
+data class LogoutOthersRes(val ok: Boolean = true, val signed_out: Int = 0)
+
 @Serializable
 data class ImageJobDto(
     val id: String,

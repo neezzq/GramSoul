@@ -266,8 +266,12 @@ fun ProfileScreen(nav: NavHostController, asTab: Boolean = false) {
                 }
             }
             Spacer(Modifier.height(16.dp))
-            PasswordCard(hasPassword = me?.has_password == true, onDone = { u -> me = u; message = "Пароль сохранён" },
+            var devicesVersion by remember { mutableStateOf(0) }
+            PasswordCard(hasPassword = me?.has_password == true,
+                onDone = { u -> me = u; message = "Пароль сохранён. На других устройствах нужно войти заново."; devicesVersion++ },
                 onError = { message = it })
+            Spacer(Modifier.height(8.dp))
+            DevicesCard(devicesVersion, onMessage = { message = it })
             Spacer(Modifier.height(8.dp))
             MyStuff(nav, onMessage = { message = it })
             Spacer(Modifier.height(20.dp))
@@ -339,7 +343,7 @@ private fun PasswordCard(hasPassword: Boolean, onDone: (UserDto) -> Unit, onErro
             if (open) {
                 if (hasPassword) app.fonar.ui.register.PasswordField(old, { old = it }, "Старый пароль", "old_password_input")
                 app.fonar.ui.register.PasswordField(pw, { pw = it }, "Новый пароль", "change_password_input",
-                    error = pwError, hint = "Не короче 6 символов")
+                    error = pwError, hint = "Не короче 8 символов")
                 app.fonar.ui.register.PasswordField(pw2, { pw2 = it }, "Повтори пароль", "change_password2_input",
                     error = if (mismatch) "Пароли не совпадают." else null, imeAction = androidx.compose.ui.text.input.ImeAction.Done)
                 Button(
@@ -362,6 +366,54 @@ private fun PasswordCard(hasPassword: Boolean, onDone: (UserDto) -> Unit, onErro
             }
         }
     }
+}
+
+/** How many devices are signed in, and «sign out on the other devices» (a lost phone, a friend's computer). */
+@Composable
+private fun DevicesCard(version: Int, onMessage: (String) -> Unit) {
+    val graph = LocalContext.current.graph
+    val scope = rememberCoroutineScope()
+    var count by remember { mutableStateOf<Int?>(null) }
+    var ask by remember { mutableStateOf(false) }
+    var reload by remember { mutableStateOf(0) }
+    LaunchedEffect(version, reload) { runCatching { graph.api.sessions().count }.onSuccess { count = it } }
+    Card(colors = CardDefaults.cardColors(containerColor = Fonar.Surface), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Устройства", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            val n = count
+            Text(
+                when {
+                    n == null -> " "
+                    n > 1 -> "Аккаунт открыт на $n устройствах, включая это."
+                    else -> "Аккаунт открыт только на этом устройстве."
+                },
+                color = Fonar.Muted, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 6.dp).testTag("devices_count"),
+            )
+            OutlinedButton(
+                onClick = { ask = true }, enabled = (n ?: 0) > 1,
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp).testTag("logout_others"),
+            ) { Text("Выйти на других устройствах") }
+        }
+    }
+    if (ask) ConfirmDelete(
+        title = "Выйти на других устройствах?",
+        text = "На всех остальных телефонах и компьютерах придётся войти заново. Это устройство останется в аккаунте.",
+        confirm = "Выйти на других",
+        onYes = {
+            ask = false
+            scope.launch {
+                try {
+                    val r = graph.api.logoutOthers()
+                    onMessage(if (r.signed_out > 0) "Готово: вышли на ${r.signed_out} устр." else "Других устройств не было")
+                } catch (e: Exception) {
+                    onMessage(errText(e))
+                }
+                reload++
+            }
+        },
+        onNo = { ask = false },
+    )
 }
 
 private class Ask(val title: String, val text: String, val action: suspend () -> Unit)

@@ -76,10 +76,10 @@ fun Lantern(modifier: Modifier = Modifier) {
     )
 }
 
-/** Same limits as the server: 6–128 characters, not only spaces. */
+/** Same limits as the server: 8–128 characters, not only spaces. */
 fun localPasswordError(pw: String): String? = when {
     pw.isEmpty() -> null
-    pw.length < 6 -> "Пароль — не короче 6 символов."
+    pw.length < 8 -> "Пароль — не короче 8 символов."
     pw.length > 128 -> "Пароль слишком длинный (максимум 128 символов)."
     pw.isBlank() -> "Пароль не может состоять из пробелов."
     else -> null

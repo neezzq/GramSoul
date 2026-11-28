@@ -4,3 +4,6 @@ httpx==0.28.1
 pydantic==2.11.4
 python-multipart==0.0.20
 pillow==11.2.1
+# encryption at rest (app/crypto.py): AES-GCM for files, SQLCipher for the database
+cryptography==46.0.7
+sqlcipher3-binary==0.6.0

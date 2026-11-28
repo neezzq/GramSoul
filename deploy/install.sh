@@ -93,6 +93,8 @@ MODEL="$(grep -E '^LLM_MODEL=' .env | cut -d= -f2- | awk '{print $1}')"
 MODEL="${MODEL:-qwen2.5:0.5b}"
 mkdir -p data/api data/ollama data/caddy data/caddy-config site backups
 chown -R 10001:10001 data/api
+chmod 700 data/api backups  # the data and the backups: root and the API only
+bash ensure-data-key.sh     # encryption at rest: the key is created once (see show-data-key.sh)
 
 if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
   ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null

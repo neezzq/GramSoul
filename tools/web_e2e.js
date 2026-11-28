@@ -157,6 +157,15 @@ async function apiAs(token, p, method = 'GET', body) {
     await page.click('#change-password-save');
     await page.waitForSelector('text=Пароль изменён');
     ok('password changed in the profile', true);
+    // another device signs in; «Выйти на других устройствах» ends its session, this one stays
+    const other = await apiAs(null, '/v1/login', 'POST', { nick: me, password: pw + '!' });
+    await page.click('#tab-chats'); await page.click('#tab-profile');
+    await page.waitForSelector('#devices-count >> text=2 устройствах');
+    await page.click('#logout-others');
+    await page.click('#confirm-ok');
+    await page.waitForSelector('#devices-count >> text=только на этом устройстве');
+    const gone = await fetch(base + '/v1/me', { headers: { Authorization: 'Bearer ' + other.token } });
+    ok('signed out on the other devices', gone.status === 401 && !!(await apiAs(token, '/v1/me')).user, String(gone.status));
     // a new nick
     const me2 = uniq('Nika');
     await page.click('#nick-edit');

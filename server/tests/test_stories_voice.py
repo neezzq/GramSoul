@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from .conftest import register, wait_generation
+from .conftest import register, stored_prompt, wait_generation
 from .test_api import cid, make_friends, shared_room, wait_photo
 
 pytestmark = pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_gender_and_narrator_voice_in_prompts(client):
     room = (await client.post(f"/v1/personas/{p['id']}/chats", headers=h)).json()["room"]
     await client.post(f"/v1/rooms/{room['id']}/messages", json={"client_id": cid(), "text": "Привет"}, headers=h)
     await wait_generation(client, h, room["id"])
-    lp = (await client.get(f"/v1/rooms/{room['id']}/last-prompt", headers=h)).json()["prompt"]
+    lp = stored_prompt(room["id"])
     assert "Мира) — женщина, обращайся к ней в женском роде" in lp
     assert "от лица рассказчика" in lp and "третьем лице" in lp
     # in a story scene: players without a hero card are addressed by their gender

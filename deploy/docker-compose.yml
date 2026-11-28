@@ -20,6 +20,10 @@ services:
     depends_on:
       - api
     mem_limit: 128m
+    # least privilege: no Linux capabilities except binding ports 80/443, no privilege escalation
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
     logging: &logging
       driver: json-file
       options: { max-size: "5m", max-file: "3" }
@@ -35,6 +39,13 @@ services:
     volumes:
       - ./data/api:/data
     mem_limit: 300m
+    # least privilege: read-only system files (writes go to /data and a small /tmp), no capabilities,
+    # no privilege escalation — a hole in the API can not change the container or the host
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     logging: *logging
 
   ollama:

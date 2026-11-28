@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.5';
+const WEB_VERSION = '1.6';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -376,12 +376,12 @@ function screenLogin(root) {
     btn.textContent = mode === 'register' ? 'Создать аккаунт' : 'Войти';
     codeLink.textContent = mode === 'code' ? '← Вход по паролю' : 'Вход по коду переноса';
     seg.classList.toggle('hidden', mode === 'code');
-    hint.textContent = e || (mode === 'register' ? 'Ник: 3–20 символов, буквы, цифры, «_» и «.». Пароль — не короче 6 символов.'
+    hint.textContent = e || (mode === 'register' ? 'Ник: 3–20 символов, буквы, цифры, «_» и «.». Пароль — не короче 8 символов.'
       : mode === 'code' ? 'Ник и код из профиля на другом устройстве (код действует 10 минут).' : '');
     hint.style.color = e ? 'var(--error)' : '';
     let ok = nick.value.trim() && !e;
     if (mode === 'login') ok = ok && pw.value.length > 0;
-    if (mode === 'register') ok = ok && pw.value.length >= 6 && pw2.value.length > 0;
+    if (mode === 'register') ok = ok && pw.value.length >= 8 && pw2.value.length > 0;
     if (mode === 'code') ok = ok && code.value.replace(/[^A-Za-z0-9]/g, '').length >= 8;
     btn.disabled = !ok;
   };
@@ -425,7 +425,7 @@ function screenSetPassword(root) {
   const pw2 = h('input', { class: 'field', id: 'new-password2', type: 'password', placeholder: 'Ещё раз', autocomplete: 'new-password', maxlength: 128 });
   const err = h('div', { class: 'error' });
   const btn = h('button', { class: 'btn primary wide', id: 'set-password', type: 'submit', disabled: true }, 'Сохранить пароль');
-  const upd = () => { btn.disabled = pw.value.length < 6 || !pw2.value; };
+  const upd = () => { btn.disabled = pw.value.length < 8 || !pw2.value; };
   [pw, pw2].forEach((x) => x.addEventListener('input', () => { err.textContent = ''; upd(); }));
   const form = h('form', null, pw, pw2, h('div', { class: 'hint' }, 'Не короче 6 символов.'), err, btn);
   form.addEventListener('submit', async (e) => {
@@ -1751,15 +1751,36 @@ async function screenProfile(root) {
 
   // password change
   const oldPw = h('input', { class: 'field', id: 'old-password', type: 'password', placeholder: 'Старый пароль', autocomplete: 'current-password' });
-  const newPw = h('input', { class: 'field', id: 'change-password', type: 'password', placeholder: 'Новый пароль (от 6 символов)', autocomplete: 'new-password', style: 'margin-top:8px' });
+  const newPw = h('input', { class: 'field', id: 'change-password', type: 'password', placeholder: 'Новый пароль (от 8 символов)', autocomplete: 'new-password', style: 'margin-top:8px' });
   const pwBtn = h('button', { class: 'btn ghost wide', id: 'change-password-save', style: 'margin-top:8px' }, 'Сменить пароль');
   pwBtn.addEventListener('click', async () => {
     try {
       await api('/v1/me/password', { method: 'POST', body: { password: newPw.value, old_password: oldPw.value } });
       oldPw.value = ''; newPw.value = '';
-      toast('Пароль изменён');
+      toast('Пароль изменён. На других устройствах нужно войти заново.');
+      drawDevices();
     } catch (e) { toast(e.message); }
   });
+
+  // devices signed in to this account; a lost phone is signed out from here
+  const devicesInfo = h('div', { class: 'muted small', id: 'devices-count', style: 'margin-top:6px;line-height:1.5' });
+  const othersBtn = h('button', { class: 'btn ghost wide', id: 'logout-others', style: 'margin-top:10px' }, 'Выйти на других устройствах');
+  const drawDevices = async () => {
+    try {
+      const n = (await api('/v1/me/sessions')).count;
+      devicesInfo.textContent = n > 1 ? `Аккаунт открыт на ${n} устройствах, включая это.` : 'Аккаунт открыт только на этом устройстве.';
+      othersBtn.disabled = n <= 1;
+    } catch (_) { devicesInfo.textContent = ''; }
+  };
+  othersBtn.addEventListener('click', async () => {
+    if (!(await confirmSheet('Выйти на других устройствах?', 'На всех остальных телефонах и компьютерах придётся войти заново. Это устройство останется в аккаунте.', 'Выйти на других', true))) return;
+    try {
+      const r = await api('/v1/logout/others', { method: 'POST' });
+      toast(r.signed_out ? `Готово: вышли на ${r.signed_out} устр.` : 'Других устройств не было');
+      drawDevices();
+    } catch (e) { toast(e.message); }
+  });
+  drawDevices();
 
   // transfer code: tap to copy
   const codeBox = h('div', { id: 'transfer-box' });
@@ -1800,6 +1821,7 @@ async function screenProfile(root) {
         'Войди по нику и паролю. Или получи одноразовый код переноса (действует 10 минут) и введи его в «Вход по коду переноса».'),
       codeBtn, codeBox),
     h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'font-weight:600;margin-bottom:8px' }, 'Пароль'), oldPw, newPw, pwBtn),
+    h('div', { class: 'card', style: 'margin-top:14px' }, h('div', { style: 'font-weight:600' }, 'Устройства'), devicesInfo, othersBtn),
     manageList('Мои персонажи', 'my-personas', async () => (await api('/v1/personas?scope=mine')).personas, (p, refresh) =>
       h('div', { class: 'list-item', 'data-persona': p.name },
         avatar(p.name || '?', personaAvatarPath(p), 40),

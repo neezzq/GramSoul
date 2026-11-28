@@ -128,7 +128,7 @@ class TwoPlayerUiTest {
             compose.waitText("пробелов")
             // password rules are checked before anything is sent
             compose.onNodeWithTag("password_input").performTextInput("123")
-            compose.waitText("не короче 6")
+            compose.waitText("не короче 8")
             compose.onNodeWithTag("password_input").performTextReplacement(TEST_PASSWORD)
             compose.onNodeWithTag("password2_input").performTextInput(TEST_PASSWORD + "x")
             compose.waitText("Пароли не совпадают")
@@ -202,6 +202,19 @@ class TwoPlayerUiTest {
             compose.waitText("Код скопирован")
             assertTrue(clipboardText().orEmpty().matches(Regex("[A-Z0-9]{4}-[A-Z0-9]{4}")))
             shot("05b_profile")
+            // the account is open here and in the old API session: «Выйти на других устройствах» ends the other one
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText("Аккаунт открыт на 2 устройствах, включая это.", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("logout_others").performScrollTo()
+                .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick)
+            compose.waitTag("confirm_yes")
+            compose.onNodeWithTag("confirm_yes").performClick()
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText("Аккаунт открыт только на этом устройстве.", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(401, (runCatching { old.call { me() } }.exceptionOrNull() as? app.fonar.data.ApiException)?.status)
+            shot("05c_profile_devices")
             compose.onNodeWithTag("tab_characters").performClick()
 
             // people search by a part of the nick

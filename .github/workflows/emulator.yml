@@ -12,6 +12,9 @@ on:
   push:
     paths: ["android/**", "server/**", "tools/emulator_e2e.py", ".github/workflows/emulator.yml"]
 
+permissions:
+  contents: read
+
 jobs:
   two-phones:
     runs-on: ubuntu-latest
