@@ -113,7 +113,7 @@ async function loadUsers(body) {
   // why the voice-over fails right now (key, balance, OpenRouter privacy settings) — players only see «недоступна»
   const vp = d.voice_problem;
   const voiceNote = vp ? h('div', { class: 'error', id: 'voice-problem', style: 'margin-top:12px' },
-    `Озвучка не работает (${date(vp.at)}): ${vp.text}`) : '';
+    `Озвучка не работает (${date(vp.at)}): ${vp.text}. Последняя удачная озвучка: ${vp.ok_at ? date(vp.ok_at) : 'не было с запуска сервера'}.`) : '';
   body.replaceChildren(totals, voiceNote, h('div', { class: 'a-wrap' }, h('table', { class: 'a-table', id: 'users-table' }, h('thead', null, head), tbody)));
 }
 

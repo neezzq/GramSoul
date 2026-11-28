@@ -248,6 +248,10 @@ async function apiAs(token, p, method = 'GET', body) {
     await p3.click('#story-play');
     await p3.waitForSelector('text=Конечная не скоро', { timeout: 20000 });
     ok('another player plays a published story (own copy)', true);
+    // an own photo in this chat (the first chat with a photo was deleted above: its photo went with it)
+    const [chooser3] = await Promise.all([p3.waitForEvent('filechooser'), p3.click('#upload')]);
+    await chooser3.setFiles(pngPath);
+    await p3.waitForSelector('.photo.own img.loaded', { timeout: 20000 });
 
     // admin page
     if (adminPassword) {
@@ -265,6 +269,7 @@ async function apiAs(token, p, method = 'GET', body) {
       await p4.screenshot({ path: `${out}/web_07_admin_users.png` });
       await p4.click('#tab-photos');
       await p4.waitForSelector('[data-photo]');
+      ok('a deleted chat takes its photos along (only the photo of the live chat is listed)', (await p4.locator('[data-photo]').count()) === 1);
       p4.once('dialog', (d) => d.accept());
       await p4.locator('[data-photo] button').first().click();
       await p4.waitForFunction(() => !document.querySelector('[data-photo]'));

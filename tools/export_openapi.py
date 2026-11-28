@@ -4,7 +4,7 @@ The running server does not publish it (openapi_url=None), so it is built from t
 the app is a dependency that reads the headers itself, which FastAPI cannot see; this script adds it to the
 description: player endpoints need "Authorization: Bearer <session token>", admin endpoints "X-Admin-Token".
 
-    cd server && python3 ../tools/export_openapi.py ../openapi.json [server-url]
+    python3 tools/export_openapi.py openapi.json [server-url]      (from any directory)
 """
 import json
 import os
@@ -13,7 +13,7 @@ import tempfile
 
 os.environ.setdefault("DATA_DIR", tempfile.mkdtemp())
 os.environ.setdefault("LLM_BACKEND", "fake")
-sys.path.insert(0, os.getcwd())
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
 
 from fastapi.routing import APIRoute  # noqa: E402
 

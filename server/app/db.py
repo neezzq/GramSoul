@@ -294,6 +294,18 @@ MIGRATIONS = [
     ("characters", "voice_timbre", "ALTER TABLE characters ADD COLUMN voice_timbre TEXT NOT NULL DEFAULT ''"),
 ]
 
+# indexes on columns added by MIGRATIONS (created after them); the picture references are looked up when a
+# story, scene or character is deleted (images.drop_unreferenced)
+INDEXES = """
+CREATE INDEX IF NOT EXISTS messages_image ON messages(image_id) WHERE image_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS image_jobs_image ON image_jobs(image_id) WHERE image_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS characters_avatar ON characters(avatar_image_id) WHERE avatar_image_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS personas_avatar ON personas(avatar_image_id) WHERE avatar_image_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS stories_cover ON stories(cover_image_id) WHERE cover_image_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS users_avatar ON users(avatar_image_id) WHERE avatar_image_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS stories_source ON stories(owner_id, source_id) WHERE source_id IS NOT NULL;
+"""
+
 
 def _rooms_table_sql(name: str) -> str:
     start = SCHEMA.index("CREATE TABLE IF NOT EXISTS rooms(")
@@ -351,6 +363,7 @@ class Database:
             cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
             if column not in cols:
                 self.conn.execute(sql)
+        self.conn.executescript(INDEXES)
 
     # -- helpers -------------------------------------------------------
     def one(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Row | None:

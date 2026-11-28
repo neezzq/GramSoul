@@ -213,16 +213,26 @@ def own_copy(db: Database, user: User, src) -> Any:
         "ORDER BY id DESC LIMIT 1", (user.id, src["id"], src["updated_at"]))
     if same:
         return same
+    # older copies of this story the player never changed and has no scenes in are out of date: replaced
+    stale = [r["public_id"] for r in db.all(
+        "SELECT public_id FROM stories s WHERE owner_id=? AND source_id=? AND updated_at=created_at "
+        "AND NOT EXISTS (SELECT 1 FROM rooms WHERE story_id=s.id)", (user.id, src["id"]))]
     copies = db.one("SELECT COUNT(*) n FROM stories WHERE owner_id=? AND source_id IS NOT NULL", (user.id,))["n"]
-    if copies >= MAX_STORY_COPIES:
+    if copies - len(stale) >= MAX_STORY_COPIES:
         raise ApiError(400, "too_many_copies", "Слишком много копий чужих историй. Удали ненужные в «Мои истории».")
     # copies made per day are limited too: deleting copies does not reset this count
     from .ratelimit import limiter
-    wait = limiter.check(f"copy:{user.id}", settings.rl_story_copies_per_day, 86400)
+    wait = None if stale else limiter.peek(f"copy:{user.id}", settings.rl_story_copies_per_day, 86400)
     if wait is not None:
         raise ApiError(429, "rate_limited", "На сегодня лимит новых чужих историй исчерпан. Продолжи уже начатые "
                                             "в «Мои истории» или попробуй завтра.", retry_after=wait)
-    return clone_story(db, user, src)
+    copy = clone_story(db, user, src)
+    if stale:  # an out-of-date copy is replaced (its pictures go with it): no new day slot is used
+        for pid in stale:
+            delete_story(db, user, pid)
+    else:  # counted once the copy exists, so a failed copy does not use a slot
+        limiter.check(f"copy:{user.id}", settings.rl_story_copies_per_day, 86400)
+    return copy
 
 
 def clone_story(db: Database, user: User, src) -> Any:

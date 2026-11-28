@@ -350,3 +350,79 @@ async def test_deleting_a_copy_frees_its_pictures_and_copies_per_day_are_limited
     assert (await client.delete(f"/v1/stories/{st['id']}", headers=ha)).status_code == 200
     assert exists(img["id"]) == (True, True)
     assert (await client.get(f"/v1/users/{a['user']['id']}/avatar", headers=hb)).status_code == 200
+
+
+async def test_deleted_scene_and_character_take_their_pictures_and_stale_copies_are_replaced(client, monkeypatch):
+    import os
+    import app.main as main
+    from .test_api import wait_photo
+    from .test_admin import png
+    from .test_personas import CARD
+    db = main.state.db
+    on_disk = lambda iid: (db.one("SELECT 1 FROM images WHERE id=?", (iid,)) is not None,  # noqa: E731
+                           os.path.exists(os.path.join(main.settings.images_dir, iid + ".jpg")))
+    ha, a = await register(client, "Автор")
+    hb, b = await register(client, "Игрок", ip="2.2.2.2")
+    # a deleted scene takes its pictures along
+    st = (await client.post("/v1/stories", json=STORY, headers=hb)).json()["story"]
+    room = (await client.post(f"/v1/stories/{st['id']}/rooms", headers=hb)).json()["room"]
+    await client.post(f"/v1/rooms/{room['id']}/photo", json={"client_id": cid(), "prompt": "трамвай"}, headers=hb)
+    s = await wait_photo(client, hb, room["id"])
+    scene = next(m["image_id"] for m in s["messages"] if m["image_id"])
+    assert on_disk(scene) == (True, True)
+    assert (await client.delete(f"/v1/rooms/{room['id']}", headers=hb)).status_code == 200
+    assert on_disk(scene) == (False, False)
+    # a deleted character takes its portrait, unless it is used elsewhere (here: also the profile photo)
+    img1 = (await client.post("/v1/images", files={"file": ("a.png", png(), "image/png")}, headers=hb)).json()["id"]
+    img2 = (await client.post("/v1/images", files={"file": ("b.png", png((9, 9, 9)), "image/png")}, headers=hb)).json()["id"]
+    p1 = (await client.post("/v1/personas", json={**CARD, "avatar_image_id": img1}, headers=hb)).json()["persona"]
+    p2 = (await client.post("/v1/personas", json={**CARD, "name": "Вторая", "avatar_image_id": img2}, headers=hb)).json()["persona"]
+    await client.patch("/v1/me", json={"avatar_image_id": img2}, headers=hb)
+    await client.delete(f"/v1/personas/{p1['id']}", headers=hb)
+    await client.delete(f"/v1/personas/{p2['id']}", headers=hb)
+    assert on_disk(img1) == (False, False) and on_disk(img2) == (True, True)
+    # an unchanged copy without scenes is replaced when the author changed the original — no day slot used
+    monkeypatch.setattr(main.settings, "rl_story_copies_per_day", 1)
+    pub = (await client.post("/v1/stories", json=STORY, headers=ha)).json()["story"]
+    await client.patch(f"/v1/stories/{pub['id']}/visibility", json={"visibility": "public"}, headers=ha)
+    await asyncio.sleep(0.005)
+    r1 = (await client.post(f"/v1/stories/{pub['id']}/rooms", headers=hb)).json()["room"]
+    await client.delete(f"/v1/rooms/{r1['id']}", headers=hb)
+    await asyncio.sleep(0.005)
+    await client.patch(f"/v1/stories/{pub['id']}/visibility", json={"visibility": "public"}, headers=ha)  # bumps it
+    await asyncio.sleep(0.005)
+    r = await client.post(f"/v1/stories/{pub['id']}/rooms", headers=hb)
+    assert r.status_code == 201, r.text
+    copies = [s for s in (await client.get("/v1/stories", headers=hb)).json()["stories"] if not s["is_demo"] and s["id"] != st["id"]]
+    assert [c["id"] for c in copies] == [r.json()["room"]["story"]["id"]] != [r1["story"]["id"]]
+
+
+async def test_voice_rate_limit_is_shown_to_the_admin(client, monkeypatch):
+    import httpx
+    import app.voice as V
+    import app.main as main
+    monkeypatch.setattr(main.settings, "llm_backend", "openrouter")
+    monkeypatch.setattr(main.settings, "tts_api_key", "sk-or-mock")
+    monkeypatch.setattr(V, "_resolved", {"model": "openai/gpt-4o-mini-tts", "voices": None, "at": __import__("time").time()})
+
+    class Busy(httpx.AsyncClient):
+        async def post(self, *a, **k):
+            return httpx.Response(429, json={"error": {"message": "Rate limit exceeded"}})
+    monkeypatch.setattr(V.httpx, "AsyncClient", Busy)
+    h, _ = await register(client, "Голос")
+    try:
+        r = await client.post("/v1/voice/preview", json={"voice": "nova", "text": "Пятая фраза."}, headers=h)
+        assert r.status_code == 429
+        p = V.last_problem()
+        assert "429" in p["text"] and "ok_at" in p
+    finally:
+        V._last_problem.clear()
+
+
+async def test_picture_reference_lookups_use_indexes(client):
+    import app.main as main
+    db = main.state.db
+    for table, col in (("messages", "image_id"), ("image_jobs", "image_id"), ("characters", "avatar_image_id"),
+                       ("personas", "avatar_image_id"), ("stories", "cover_image_id"), ("users", "avatar_image_id")):
+        plan = " ".join(r[3] for r in db.all(f"EXPLAIN QUERY PLAN SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", ("x",)))
+        assert "USING INDEX" in plan or "USING COVERING INDEX" in plan, (table, plan)

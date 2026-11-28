@@ -181,8 +181,12 @@ def set_visibility(d: Database, user: User, pid: str, visibility: str) -> dict:
 
 
 def delete(d: Database, user: User, pid: str) -> dict:
+    from .images import delete_image_files, drop_unreferenced
     row = _own(d, user, pid)
-    d.run("DELETE FROM personas WHERE id=?", (row["id"],))
+    with d.tx():  # its chats stay (with their pictures); the portrait goes unless something else uses it
+        d.run("DELETE FROM personas WHERE id=?", (row["id"],))
+        gone = drop_unreferenced(d, [row["avatar_image_id"]])
+    delete_image_files(gone)
     return {"ok": True}
 
 

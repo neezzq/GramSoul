@@ -255,6 +255,8 @@ async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
             _problem(f"сервис озвучки не ответил ({type(e).__name__})")
             raise ApiError(502, "voice_failed", "Сервис озвучки не ответил. Попробуй ещё раз.")
     if r.status_code == 429:
+        log.warning("tts 429: %s", r.text[:300])
+        _problem("OpenRouter отклоняет запросы озвучки: слишком часто (лимит ключа или провайдера, ошибка 429)")
         raise ApiError(429, "voice_busy", "Сервис озвучки занят. Попробуй через минуту.")
     if r.status_code >= 400:
         # what exactly went wrong (key, balance, account privacy settings) is for the owner: the log and the
@@ -273,11 +275,13 @@ async def _openrouter_speech(text: str, voice: str, instr: str) -> bytes:
         _problem(f"сервис озвучки вернул не аудио ({ctype or 'без типа'})")
         raise ApiError(502, "voice_failed", UNAVAILABLE)
     _last_problem.clear()
+    _last_ok["at"] = int(time.time() * 1000)
     return r.content
 
 
 UNAVAILABLE = "Озвучка сейчас недоступна. Попробуй позже."
 _last_problem: dict = {}
+_last_ok: dict = {"at": None}  # the last voice-over actually made by the service (lines from the cache do not count)
 
 
 def _problem(text: str) -> None:
@@ -285,8 +289,10 @@ def _problem(text: str) -> None:
 
 
 def last_problem() -> dict | None:
-    """The latest unresolved voice-over failure with its reason (for the admin page), or None."""
-    return dict(_last_problem) or None
+    """The latest unresolved voice-over failure with its reason (for the admin page), or None. `ok_at` — when the
+    service last made a voice-over: lines replayed from the cache do not clear the problem, so the admin sees
+    whether anything worked after it."""
+    return {**_last_problem, "ok_at": _last_ok["at"]} if _last_problem else None
 
 
 def clean_cache(max_age_days: int = 30) -> int:

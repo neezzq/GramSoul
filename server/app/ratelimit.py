@@ -22,6 +22,15 @@ class RateLimiter:
             self._gc(now)
         return None
 
+    def peek(self, key: str, limit: int, window_s: float) -> float | None:
+        """Like check, but does not register a hit (register it with check once the action succeeded)."""
+        now = time.monotonic()
+        q = self._hits.get(key) or ()
+        recent = [t for t in q if t > now - window_s]
+        if len(recent) >= limit:
+            return max(1.0, window_s - (now - recent[0]))
+        return None
+
     def _gc(self, now: float) -> None:
         for k in list(self._hits.keys()):
             q = self._hits[k]

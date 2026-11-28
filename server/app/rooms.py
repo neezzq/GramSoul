@@ -196,8 +196,16 @@ def create_room(db: Database, user: User, story_pid: str) -> dict:
 def delete_room(db: Database, user: User, room_pid: str) -> None:
     room = member_room(db, user, room_pid)
     if room["owner_id"] == user.id:
+        from .images import delete_image_files, drop_unreferenced
         with db.tx():
+            # the scene's pictures (AI pictures, players' photos) go with it unless something else uses them
+            pics = {m["image_id"] for m in db.all(
+                "SELECT image_id FROM messages WHERE room_id=? AND image_id IS NOT NULL", (room["id"],))}
+            pics |= {j["image_id"] for j in db.all(
+                "SELECT image_id FROM image_jobs WHERE room_id=? AND image_id IS NOT NULL", (room["id"],))}
             db.run("DELETE FROM rooms WHERE id=?", (room["id"],))
+            gone = drop_unreferenced(db, pics)
+        delete_image_files(gone)
     else:  # guest leaves
         with db.tx():
             db.run("UPDATE rooms SET guest_id=NULL WHERE id=?", (room["id"],))
