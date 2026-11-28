@@ -52,9 +52,10 @@ function showLogin(msg) {
 
 function showPanel(tab) {
   const body = h('div');
-  const seg = h('div', { class: 'seg', style: 'max-width:360px' },
+  const seg = h('div', { class: 'seg', style: 'max-width:520px' },
     h('button', { class: tab === 'users' ? 'on' : '', id: 'tab-users', onclick: () => showPanel('users') }, 'Пользователи'),
-    h('button', { class: tab === 'photos' ? 'on' : '', id: 'tab-photos', onclick: () => showPanel('photos') }, 'Фото игроков'));
+    h('button', { class: tab === 'photos' ? 'on' : '', id: 'tab-photos', onclick: () => showPanel('photos') }, 'Фото игроков'),
+    h('button', { class: tab === 'posts' ? 'on' : '', id: 'tab-posts', onclick: () => showPanel('posts') }, 'Публикации'));
   $('#admin').replaceChildren(h('div', { class: 'a-page' },
     h('div', { class: 'a-head' }, h('img', { src: '/app/icon-192.png', alt: '' }), h('h1', null, 'GramSoul · админка'),
       h('button', { class: 'btn ghost small', id: 'admin-logout', onclick: async () => {
@@ -62,7 +63,7 @@ function showPanel(tab) {
         sessionStorage.removeItem(tokenKey); showLogin();
       } }, 'Выйти')),
     seg, body));
-  (tab === 'users' ? loadUsers : loadPhotos)(body);
+  ({ users: loadUsers, photos: loadPhotos, posts: loadPosts }[tab] || loadUsers)(body);
 }
 
 async function loadUsers(body) {
@@ -80,7 +81,7 @@ async function loadUsers(body) {
   const cols = [
     ['nick', 'Ник'], ['created_at', 'Регистрация'], ['last_seen_at', 'Был(а)'], ['text_tokens', 'Текст, токены', 1],
     ['avatar_tokens', 'Аватарки, токены', 1], ['avatars', 'Аватарок', 1], ['photo_tokens', 'Фото сцен, токены', 1],
-    ['scene_photos', 'Фото сцен', 1], ['voice_chars', 'Озвучка, симв.', 1], ['photos', 'Свои фото', 1], ['personas', 'Персонажей', 1], ['rooms', 'Чатов', 1], ['cost', 'Стоимость', 1]];
+    ['scene_photos', 'Фото сцен', 1], ['voice_chars', 'Озвучка, симв.', 1], ['photos', 'Свои фото', 1], ['personas', 'Персонажей', 1], ['rooms', 'Чатов', 1], ['coins', 'Монетки', 1], ['elite_until', 'Elite до'], ['cost', 'Стоимость', 1]];
   let sortKey = 'cost';
   let desc = true;
   const tbody = h('tbody');
@@ -96,7 +97,10 @@ async function loadUsers(body) {
       h('td', { class: 'num' }, fmt(u.text_tokens)), h('td', { class: 'num' }, fmt(u.avatar_tokens)), h('td', { class: 'num' }, fmt(u.avatars)),
       h('td', { class: 'num' }, fmt(u.photo_tokens)), h('td', { class: 'num' }, fmt(u.scene_photos)), h('td', { class: 'num' }, fmt(u.voice_chars || 0)),
       h('td', { class: 'num' }, fmt(u.photos)),
-      h('td', { class: 'num' }, fmt(u.personas)), h('td', { class: 'num' }, fmt(u.rooms)), h('td', { class: 'num' }, money(u.cost)),
+      h('td', { class: 'num' }, fmt(u.personas)), h('td', { class: 'num' }, fmt(u.rooms)),
+      h('td', { class: 'num', 'data-coins': u.nick }, fmt(u.coins || 0)), h('td', { 'data-elite': u.nick }, u.elite_until ? date(u.elite_until) : '—'),
+      h('td', { class: 'num' }, money(u.cost)),
+      h('td', null, h('button', { class: 'btn small', 'data-grant': u.nick, title: 'Подарить монетки или дни Elite', onclick: () => grantSheet(u, draw) }, 'Выдать')),
       h('td', null, h('button', { class: 'btn danger small', 'data-delete': u.nick, title: 'Удалить игрока со всеми его данными', onclick: async () => {
         if (!confirm(`Удалить игрока «${u.nick}» навсегда — вместе с его персонажами, историями, чатами и фото?`)) return;
         try {
@@ -108,7 +112,7 @@ async function loadUsers(body) {
   };
   const head = h('tr', null, cols.map(([k, label, num]) => h('th', { class: num ? 'num' : '', onclick: () => {
     desc = sortKey === k ? !desc : true; sortKey = k; draw();
-  } }, label)), h('th', null, ''));
+  } }, label)), h('th', null, ''), h('th', null, ''));
   draw();
   // why the voice-over fails right now (key, balance, OpenRouter privacy settings) — players only see «недоступна»
   const vp = d.voice_problem;
@@ -140,6 +144,59 @@ async function loadPhotos(body) {
   body.replaceChildren(h('div', { class: 'muted small', style: 'margin:12px 0' },
     `Свои фото игроков из чатов. Каждое удаляется автоматически через ${d.ttl_days} дней; здесь можно удалить раньше.`),
   d.photos.length ? grid : h('div', { class: 'muted' }, 'Фото нет.'));
+}
+
+// a gift to a player: coins and/or days of Elite (to try things out or to reward someone)
+function grantSheet(u, redraw) {
+  const coins = h('input', { class: 'field', id: 'grant-coins', type: 'number', min: 0, max: 100000, value: 0 });
+  const days = h('input', { class: 'field', id: 'grant-days', type: 'number', min: 0, max: 3650, value: 0 });
+  const err = h('div', { class: 'error hidden' });
+  const close = () => back.remove();
+  const go = h('button', { class: 'btn primary', id: 'grant-go', onclick: async () => {
+    const body = { coins: Math.max(0, parseInt(coins.value, 10) || 0), elite_days: Math.max(0, parseInt(days.value, 10) || 0) };
+    if (!body.coins && !body.elite_days) { err.textContent = 'Укажи монетки или дни Elite.'; err.classList.remove('hidden'); return; }
+    go.disabled = true;
+    try {
+      const r = await api('/v1/admin/users/' + u.id + '/grant', 'POST', body);
+      u.coins = r.coins;
+      u.elite_until = r.elite_until && r.elite_until > Date.now() ? r.elite_until : null;
+      close(); redraw();
+    } catch (e) { go.disabled = false; if (e.message !== 'auth') { err.textContent = e.message; err.classList.remove('hidden'); } }
+  } }, 'Выдать');
+  const back = h('div', { class: 'a-sheet-back', onclick: (e) => { if (e.target === back) close(); } },
+    h('div', { class: 'card a-sheet' },
+      h('h3', null, 'Подарок для «' + u.nick + '»'),
+      h('label', { class: 'muted small' }, 'Монетки'), coins,
+      h('label', { class: 'muted small' }, 'Дни Elite (продлевают текущую подписку)'), days, err,
+      h('div', { class: 'row', style: 'gap:8px;margin-top:12px' }, h('button', { class: 'btn ghost', onclick: close }, 'Отмена'), go)));
+  document.body.append(back);
+  coins.focus();
+}
+
+// the feed: any post can be removed (rules, complaints)
+async function loadPosts(body) {
+  body.replaceChildren(h('div', { class: 'muted', style: 'margin-top:12px' }, 'Загрузка…'));
+  let d;
+  try { d = await api('/v1/admin/posts'); } catch (e) { if (e.message !== 'auth') body.replaceChildren(h('div', { class: 'error' }, e.message)); return; }
+  const list = h('div', { class: 'a-posts', id: 'posts' });
+  for (const p of d.posts) {
+    const imgs = h('div', { class: 'a-post-imgs' }, p.images.map((iid) => {
+      const img = h('img', { alt: '' });
+      fetch('/v1/admin/posts/' + p.id + '/images/' + iid, { headers: { 'X-Admin-Token': token() } })
+        .then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) img.src = URL.createObjectURL(b); });
+      return img;
+    }));
+    const card = h('div', { class: 'card a-post', 'data-post': p.id },
+      h('div', { class: 'muted small' }, h('b', null, p.nick), ' · ', date(p.created_at)),
+      p.text ? h('div', { class: 'a-post-text' }, p.text) : null, p.images.length ? imgs : null,
+      h('button', { class: 'btn danger small', style: 'margin-top:8px', onclick: async () => {
+        if (!confirm('Удалить эту публикацию вместе с комментариями?')) return;
+        try { await api('/v1/admin/posts/' + p.id, 'DELETE'); card.remove(); } catch (e) { if (e.message !== 'auth') alert(e.message); }
+      } }, 'Удалить'));
+    list.append(card);
+  }
+  body.replaceChildren(h('div', { class: 'muted small', style: 'margin:12px 0' }, 'Последние публикации в ленте. Удалённая пропадает у всех сразу.'),
+    d.posts.length ? list : h('div', { class: 'muted' }, 'Публикаций нет.'));
 }
 
 window.addEventListener('DOMContentLoaded', () => (token() ? showPanel('users') : showLogin()));

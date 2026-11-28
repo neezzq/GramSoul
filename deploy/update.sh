@@ -27,4 +27,7 @@ fi
 $DC restart api
 bash fetch-apk.sh || true
 docker image prune -f >/dev/null
+if grep -qiE '^(PAYMENTS_TEST_MODE|DEMO_CONTENT)=(on|1|true|yes)' .env 2>/dev/null; then
+  echo "ВНИМАНИЕ: в deploy/.env включён тестовый режим (PAYMENTS_TEST_MODE или DEMO_CONTENT). На боевом сервере убери эти строки."
+fi
 echo "updated to $(git -C .. log -1 --format='%h %s')"

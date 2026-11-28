@@ -17,3 +17,11 @@
 .a-photo .meta b { color: var(--text); }
 .a-login { max-width: 360px; margin: 12vh auto 0; padding: 0 16px; text-align: center; }
 .a-login img { width: 120px; }
+.a-sheet-back { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+.a-sheet { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 6px; }
+.a-sheet h3 { margin: 0 0 8px; }
+.a-sheet .row .btn { flex: 1; }
+.a-posts { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.a-post-text { margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
+.a-post-imgs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 8px; }
+.a-post-imgs img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; background: var(--surface2); }

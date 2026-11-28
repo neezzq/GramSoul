@@ -272,10 +272,105 @@ CREATE TABLE IF NOT EXISTS admin_sessions(
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
+
+-- coins: every change of a balance is written down (users.coins is the balance)
+CREATE TABLE IF NOT EXISTS coin_ledger(
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  delta INTEGER NOT NULL,
+  balance_after INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  ref TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS coin_ledger_user ON coin_ledger(user_id, id);
+
+-- purchases of coins and Elite (YooKassa, or the test stub)
+CREATE TABLE IF NOT EXISTS payments(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  product TEXT NOT NULL,
+  title TEXT NOT NULL,
+  amount_kopecks INTEGER NOT NULL,
+  coins INTEGER NOT NULL DEFAULT 0,
+  elite_days INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK(status IN ('pending','succeeded','canceled')),
+  provider TEXT NOT NULL,
+  provider_id TEXT,
+  confirmation_url TEXT,
+  created_at INTEGER NOT NULL,
+  paid_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS payments_user ON payments(user_id, id);
+
+-- favourite characters
+CREATE TABLE IF NOT EXISTS favorites(
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  persona_id INTEGER NOT NULL REFERENCES personas(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(user_id, persona_id)
+);
+CREATE INDEX IF NOT EXISTS favorites_persona ON favorites(persona_id);
+
+-- public stories pinned on a profile
+CREATE TABLE IF NOT EXISTS profile_pins(
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  position INTEGER NOT NULL,
+  PRIMARY KEY(user_id, story_id)
+);
+
+-- the feed: posts with pictures, likes, comments; following authors
+CREATE TABLE IF NOT EXISTS posts(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS posts_author ON posts(author_id, id DESC);
+CREATE TABLE IF NOT EXISTS post_images(
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  image_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY(post_id, position)
+);
+CREATE INDEX IF NOT EXISTS post_images_image ON post_images(image_id);
+CREATE TABLE IF NOT EXISTS post_likes(
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(post_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS post_comments(
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS post_comments_post ON post_comments(post_id, id);
+CREATE TABLE IF NOT EXISTS follows(
+  follower_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  followee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(follower_id, followee_id)
+);
+CREATE INDEX IF NOT EXISTS follows_followee ON follows(followee_id);
 """
 
 # columns added after the first release (ALTER TABLE keeps existing data)
 MIGRATIONS = [
+    # coins, Elite and the look of a profile (nick style, avatar frame, banner)
+    ("users", "coins", "ALTER TABLE users ADD COLUMN coins INTEGER NOT NULL DEFAULT 0"),
+    ("users", "elite_until", "ALTER TABLE users ADD COLUMN elite_until INTEGER"),
+    ("users", "nick_style", "ALTER TABLE users ADD COLUMN nick_style TEXT NOT NULL DEFAULT ''"),
+    ("users", "frame", "ALTER TABLE users ADD COLUMN frame TEXT NOT NULL DEFAULT ''"),
+    ("users", "banner_image_id", "ALTER TABLE users ADD COLUMN banner_image_id TEXT"),
+    # what a scene picture cost (refunded if it fails)
+    ("image_jobs", "cost", "ALTER TABLE image_jobs ADD COLUMN cost INTEGER NOT NULL DEFAULT 0"),
     ("rooms", "ai_mode", "ALTER TABLE rooms ADD COLUMN ai_mode TEXT NOT NULL DEFAULT 'local'"),
     ("messages", "image_id", "ALTER TABLE messages ADD COLUMN image_id TEXT"),
     ("generations", "provider", "ALTER TABLE generations ADD COLUMN provider TEXT"),
@@ -315,6 +410,7 @@ CREATE INDEX IF NOT EXISTS characters_avatar ON characters(avatar_image_id) WHER
 CREATE INDEX IF NOT EXISTS personas_avatar ON personas(avatar_image_id) WHERE avatar_image_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS stories_cover ON stories(cover_image_id) WHERE cover_image_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS users_avatar ON users(avatar_image_id) WHERE avatar_image_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS users_banner ON users(banner_image_id) WHERE banner_image_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS stories_source ON stories(owner_id, source_id) WHERE source_id IS NOT NULL;
 """
 

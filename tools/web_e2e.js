@@ -293,6 +293,25 @@ async function apiAs(token, p, method = 'GET', body) {
       await p4.waitForFunction((n) => !document.querySelector(`#users-table tr[data-nick="${n}"]`), junk);
       const gone = await apiAs(null, '/v1/login', 'POST', { nick: junk, password: 'junk-pass-1' });
       ok('admin deletes a test account', !gone.token);
+      // a gift of coins and Elite days from the admin page
+      const coinsBefore = (await apiAs(tok, '/v1/shop')).coins;
+      await p4.click(`[data-grant="${me2}"]`);
+      await p4.fill('#grant-coins', '50');
+      await p4.fill('#grant-days', '7');
+      await p4.click('#grant-go');
+      await p4.waitForFunction((n) => { const c = document.querySelector(`[data-elite="${n}"]`); return c && c.textContent !== '—'; }, me2);
+      const shop2 = await apiAs(tok, '/v1/shop');
+      ok('admin gives coins and Elite days', shop2.coins === coinsBefore + 50 && shop2.elite.active, `${coinsBefore} → ${shop2.coins}`);
+      // a post in the feed is removed by the admin
+      const badPost = (await apiAs(tok, '/v1/posts', 'POST', { text: 'Публикация для модерации ' + Date.now() })).post;
+      await p4.click('#tab-posts');
+      await p4.waitForSelector(`[data-post="${badPost.id}"]`);
+      await p4.screenshot({ path: `${out}/web_07b_admin_posts.png` });
+      p4.once('dialog', (d) => d.accept());
+      await p4.click(`[data-post="${badPost.id}"] button`);
+      await p4.waitForFunction((id) => !document.querySelector(`[data-post="${id}"]`), badPost.id);
+      const feedNow = await apiAs(tok, '/v1/posts');
+      ok('admin removes a post from the feed', !feedNow.posts.some((x) => x.id === badPost.id));
       const msgs = await page.goto(base + '/app/#/chats');
     }
 
@@ -318,6 +337,67 @@ async function apiAs(token, p, method = 'GET', body) {
     await p5.waitForSelector('.m-row.mine >> text=Привет с компьютера', { timeout: 15000 });
     ok('computer: the list of chats next to the chat, Enter sends', true);
     await p5.screenshot({ path: `${out}/web_11_desktop_chat.png` });
+
+    // phone: favourites, the feed, coins and Elite (the payment stub in test mode), the look of the profile
+    const ec = await browser.newContext({ ...phone });
+    const el = await apiAs(null, '/v1/register', 'POST', { nick: uniq('Elite'), password: 'elite-pass-1' });
+    await ec.addInitScript(([t, u]) => { localStorage.setItem('gs_token', t); localStorage.setItem('gs_me', u); },
+      [el.token, JSON.stringify(el.user)]);
+    const p6 = await ec.newPage();
+    watch(p6);
+    await p6.goto(base + '/app/#/characters');
+    await p6.waitForSelector('[data-fav="Вера Солнцева"]');
+    await p6.click('[data-fav="Вера Солнцева"]');
+    await p6.waitForSelector('[data-fav="Вера Солнцева"].on');
+    await p6.click('#scope-favorites');
+    await p6.waitForSelector('#scope-favorites.on');
+    await p6.waitForFunction(() => document.querySelectorAll('#personas [data-name]').length === 1);
+    ok('a character added to the favourites shows under «Избранное»', !!(await p6.$('#personas [data-name="Вера Солнцева"]')));
+    await p6.click('#tab-feed');
+    await p6.waitForSelector('#post-text');
+    const postText = 'Публикация из сценария ' + Date.now().toString(36);
+    await p6.fill('#post-text', postText + ' #проверка');
+    const [ch6] = await Promise.all([p6.waitForEvent('filechooser'), p6.click('#post-add-image')]);
+    await ch6.setFiles(pngPath);
+    await p6.waitForSelector('.composer-thumbs .thumb img.loaded', { timeout: 20000 });
+    await p6.click('#post-publish');
+    const myPost = p6.locator('.post', { hasText: postText });
+    await myPost.waitFor();
+    await myPost.locator('.post-img img.loaded').waitFor({ timeout: 20000 });
+    const postId = await myPost.getAttribute('data-post');
+    await p6.click('[data-like="' + postId + '"]');
+    await p6.waitForSelector('[data-like="' + postId + '"].on >> text=1');
+    await p6.click('[data-comments="' + postId + '"]');
+    await p6.fill('[data-comment-input="' + postId + '"]', 'Комментарий из сценария');
+    await p6.click('[data-comment-send="' + postId + '"]');
+    await p6.waitForSelector('.comment >> text=Комментарий из сценария');
+    ok('feed: a post with a picture, a like and a comment', true);
+    await shot('web_12_feed', p6);
+    // Elite things are locked without Elite
+    await p6.click('#tab-profile');
+    await p6.waitForSelector('[data-nick-style="aurora"].locked');
+    await p6.click('[data-nick-style="aurora"]');
+    await p6.waitForSelector('text=Нужна подписка Elite');
+    await p6.click('#confirm-ok');
+    await p6.waitForSelector('#buy-elite');
+    // coins: the stub pays in test mode (PAYMENTS_TEST_MODE=on)
+    await p6.click('[data-product="coins_100"]');
+    await p6.click('#confirm-ok');
+    await p6.waitForSelector('#coins-balance >> text=200');
+    await p6.click('#buy-elite');
+    await p6.click('#confirm-ok');
+    await p6.waitForSelector('#elite-status');
+    ok('coins and Elite bought through the payment stub (test mode)', (await p6.textContent('#coins-balance')).trim() === '500');
+    await shot('web_13_coins', p6);
+    await p6.goto(base + '/app/#/profile');
+    await p6.waitForSelector('[data-nick-style="aurora"]:not(.locked)');
+    await p6.click('[data-nick-style="aurora"]');
+    await p6.waitForSelector('#profile-nick.nick-fx');
+    await p6.click('[data-frame-opt="neon"]');
+    await p6.waitForSelector('.profile-av-box .ring.spin');
+    const look = await apiAs(el.token, '/v1/users/' + el.user.id);
+    ok('Elite: a glowing nick and an animated frame, seen by others too', look.user.nick_style === 'aurora' && look.user.frame === 'neon' && look.user.elite);
+    await shot('web_14_profile_looks', p6);
   } catch (e) {
     ok('scenario', false, String(e).slice(0, 300));
     await shot('web_error').catch(() => {});

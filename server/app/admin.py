@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 from .config import settings
-from .db import Database
+from .db import Database, now_ms
 
 
 def users(db: Database) -> dict:
     rows = db.all(
-        "SELECT u.id, u.public_id, u.nick, u.created_at, (u.password_hash IS NOT NULL) has_password, "
+        "SELECT u.id, u.public_id, u.nick, u.created_at, (u.password_hash IS NOT NULL) has_password, u.coins, u.elite_until, "
         "(SELECT MAX(last_seen_at) FROM sessions s WHERE s.user_id=u.id) last_seen, "
         "(SELECT COUNT(*) FROM personas p WHERE p.author_id=u.id) personas, "
         "(SELECT COUNT(*) FROM rooms r WHERE r.owner_id=u.id) rooms, "
@@ -33,7 +33,8 @@ def users(db: Database) -> dict:
             "has_password": bool(r["has_password"]), "personas": r["personas"], "rooms": r["rooms"], "photos": r["photos"],
             "text_tokens": u.get("text", 0), "avatar_tokens": u.get("avatar", 0), "avatars": u.get("avatars", 0),
             "photo_tokens": u.get("photo", 0), "scene_photos": u.get("scene_photos", 0), "cost": round(u.get("cost", 0.0), 4),
-            "voice_chars": u.get("voice", 0),
+            "voice_chars": u.get("voice", 0), "coins": r["coins"],
+            "elite_until": r["elite_until"] if r["elite_until"] and r["elite_until"] > now_ms() else None,
         }
         for k in ("text", "avatar", "photo"):
             total[k] += item[f"{k}_tokens"]

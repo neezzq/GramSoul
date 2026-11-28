@@ -34,11 +34,8 @@ class Worker:
                 self.db.run("UPDATE generations SET status='failed', error=?, finished_at=? WHERE id=?",
                             ("Сервер перезапускался во время генерации. Нажми «Повторить».", now_ms(), r["id"]))
                 _bump(self.db, r["room_id"])
-        for r in self.db.all("SELECT id, room_id FROM image_jobs WHERE status='running'"):
-            with self.db.tx():
-                self.db.run("UPDATE image_jobs SET status='failed', error=?, finished_at=? WHERE id=?",
-                            ("Сервер перезапускался — попробуй ещё раз.", now_ms(), r["id"]))
-                _bump(self.db, r["room_id"])
+        for r in self.db.all("SELECT * FROM image_jobs WHERE status='running'"):
+            self._finish_image_failed(r, "Сервер перезапускался — попробуй ещё раз.", notify=False)
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
@@ -397,12 +394,17 @@ class Worker:
             _bump(db, room["id"])
         _notify_room(room["id"])
 
-    def _finish_image_failed(self, job, error: str) -> None:
+    def _finish_image_failed(self, job, error: str, notify: bool = True) -> None:
+        from . import coins
         with self.db.tx():
-            self.db.run("UPDATE image_jobs SET status='failed', error=?, finished_at=? WHERE id=?",
-                        (error[:300], now_ms(), job["id"]))
+            cur = self.db.run("UPDATE image_jobs SET status='failed', error=?, finished_at=? WHERE id=? AND status<>'failed'",
+                              (error[:300], now_ms(), job["id"]))
+            cost = self.db.one("SELECT cost FROM image_jobs WHERE id=?", (job["id"],))["cost"]
+            if cur.rowcount and cost and job["requested_by"]:  # the coins come back once
+                coins.credit(self.db, job["requested_by"], cost, "scene_image_refund", job["public_id"])
             _bump(self.db, job["room_id"])
-        _notify_room(job["room_id"])
+        if notify:
+            _notify_room(job["room_id"])
 
     async def _on_delta(self, room_id: int, piece: str) -> None:
         hub.partial_add(room_id, piece)

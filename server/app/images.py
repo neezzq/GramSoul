@@ -72,7 +72,8 @@ def save_image(db: Database, owner_id: int | None, data: bytes, w: int, h: int) 
 
 # every place that points at a picture (see db.SCHEMA and MIGRATIONS)
 _IMAGE_REFS = (("stories", "cover_image_id"), ("characters", "avatar_image_id"), ("personas", "avatar_image_id"),
-               ("users", "avatar_image_id"), ("messages", "image_id"), ("image_jobs", "image_id"))
+               ("users", "avatar_image_id"), ("messages", "image_id"), ("image_jobs", "image_id"),
+               ("post_images", "image_id"), ("users", "banner_image_id"))
 
 
 def drop_unreferenced(db: Database, ids) -> list[str]:

@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.7';
+const WEB_VERSION = '1.8';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -69,6 +69,14 @@ const ICONS = {
   play: 'M8 5v14l11-7z',
   globe: 'M12 21a9 9 0 100-18 9 9 0 000 18zM3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9s-1.3 6.5-3.8 9c-2.5-2.5-3.8-5.5-3.8-9s1.3-6.5 3.8-9z',
   sliders: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4',
+  feed: 'M5 4h14v16H5zM8 8h8M8 12h8M8 16h5',
+  heart: 'M12 20s-7-4.4-9-9a4.8 4.8 0 019-2.6A4.8 4.8 0 0121 11c-2 4.6-9 9-9 9z',
+  comment: 'M4 5h16v11H9l-5 4z',
+  coin: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 7v10M9.5 9.5c0-1 1.1-1.8 2.5-1.8s2.5.8 2.5 1.8-1.1 1.6-2.5 1.8-2.5.8-2.5 1.8 1.1 1.8 2.5 1.8 2.5-.8 2.5-1.8',
+  crown: 'M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5zM5 19h14',
+  pin: 'M9 4h6l-1 6 3 3H7l3-3zM12 13v8',
+  lock: 'M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 017 0v3',
+  check: 'M5 12l5 5 9-10',
 };
 function icon(name, size = 24) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -234,6 +242,82 @@ function avatar(name, path, size = 40, extra) {
 }
 const userAvatarPath = (u) => (u && u.avatar_image_id ? `/v1/users/${u.id}/avatar?v=${u.avatar_image_id}` : null);
 const preview = (s) => (s || '').replace(/\*/g, '').replace(/\s+/g, ' ').trim();  // a list line without *action* marks
+
+// ------------------------------------------------------------------ the look of a profile (Elite)
+// the colors come from the server (GET /v1/looks); these are the same, for the first paint and offline
+const LOOKS = {
+  nick_styles: [
+    { id: 'aurora', label: 'Сияние', colors: ['#ff8cc6', '#c8b4ff', '#7ad7ff'] }, { id: 'sunset', label: 'Закат', colors: ['#ffb36b', '#ff6f91', '#ff8cc6'] },
+    { id: 'ocean', label: 'Океан', colors: ['#4fd1ff', '#5b8cff', '#a78bfa'] }, { id: 'gold', label: 'Золото', colors: ['#ffe29a', '#f5b942', '#fff3c4'] },
+    { id: 'neon', label: 'Неон', colors: ['#5dff9e', '#2de2e6', '#b8ff5d'] }, { id: 'candy', label: 'Конфета', colors: ['#ff9de2', '#ffd36e', '#8ef0ff'] }],
+  frames: [
+    { id: 'silver', label: 'Серебро', colors: ['#d9d9de', '#8e8e96'], elite: false, animated: false },
+    { id: 'rose', label: 'Роза', colors: ['#ff8cc6', '#ff5fa8'], elite: false, animated: false },
+    { id: 'lilac', label: 'Сирень', colors: ['#c8b4ff', '#8f73ff'], elite: false, animated: false },
+    { id: 'mint', label: 'Мята', colors: ['#7ef0c2', '#3cc995'], elite: false, animated: false },
+    { id: 'neon', label: 'Неон', colors: ['#ff5fa8', '#7a5cff', '#2de2e6', '#ff5fa8'], elite: true, animated: true },
+    { id: 'gold', label: 'Золото', colors: ['#fff3c4', '#f5b942', '#b8860b', '#f5b942', '#fff3c4'], elite: true, animated: true },
+    { id: 'aurora', label: 'Сияние', colors: ['#ff8cc6', '#c8b4ff', '#7ad7ff', '#7ef0c2', '#ff8cc6'], elite: true, animated: true },
+    { id: 'flame', label: 'Пламя', colors: ['#ffcf5c', '#ff6b3d', '#ff2d55', '#ff6b3d', '#ffcf5c'], elite: true, animated: true }],
+  max_pins: 3,
+};
+let looksLoaded = false;
+async function loadLooks() {
+  if (looksLoaded) return LOOKS;
+  try { Object.assign(LOOKS, await api('/v1/looks')); looksLoaded = true; } catch (_) {}
+  return LOOKS;
+}
+const nickStyle = (id) => LOOKS.nick_styles.find((s) => s.id === id);
+const frameOf = (id) => LOOKS.frames.find((f) => f.id === id);
+/** A nick: glowing, its colors flowing along the letters, with Elite; plain otherwise. */
+function nickEl(u, cls = '', styleId) {
+  const st = nickStyle(styleId !== undefined ? styleId : u && u.nick_style);
+  const el = h('span', { class: 'nick' + (st ? ' nick-fx' : '') + (cls ? ' ' + cls : '') }, (u && u.nick) || '');
+  if (st) {
+    const c = st.colors;
+    el.style.setProperty('--nick-grad', `linear-gradient(90deg, ${[...c, c[0]].join(', ')})`);
+    el.style.setProperty('--nick-glow', c[0]);
+  }
+  return el;
+}
+function eliteBadge(u) {
+  return u && u.elite ? h('span', { class: 'elite-badge', title: 'Elite' }, icon('crown', 12), 'Elite') : null;
+}
+/** A nick followed by the Elite badge. */
+function nickLine(u, cls = '') {
+  return h('span', { class: 'nick-line' + (cls ? ' ' + cls : '') }, nickEl(u), eliteBadge(u));
+}
+/** The profile photo inside its frame (a colored ring; Elite frames shine and turn). */
+function framedAvatar(u, size = 40, frameId, extra) {
+  const a = avatar((u && u.nick) || '?', userAvatarPath(u), size, extra);
+  const f = frameOf(frameId !== undefined ? frameId : u && u.frame);
+  if (!f) return a;
+  const ring = h('span', { class: 'ring' + (f.animated ? ' spin' : ''), 'data-frame': f.id });
+  ring.style.setProperty('--ring', `conic-gradient(${[...f.colors, f.colors[0]].join(', ')})`);
+  ring.style.setProperty('--ring-glow', f.colors[0]);
+  ring.style.setProperty('--ring-w', Math.max(2, Math.round(size / 18)) + 'px');
+  ring.append(a);
+  return ring;
+}
+const userPath = (u) => '#/user/' + u.id;
+function ringAround(el, frameId, size) {
+  const f = frameOf(frameId);
+  if (!f) return el;
+  const ring = h('span', { class: 'ring' + (f.animated ? ' spin' : ''), 'data-frame': f.id });
+  ring.style.setProperty('--ring', `conic-gradient(${[...f.colors, f.colors[0]].join(', ')})`);
+  ring.style.setProperty('--ring-glow', f.colors[0]);
+  ring.style.setProperty('--ring-w', Math.max(2, Math.round(size / 18)) + 'px');
+  ring.append(el);
+  return ring;
+}
+function applyNickStyle(el, styleId) {
+  const st = nickStyle(styleId);
+  el.classList.toggle('nick-fx', !!st);
+  if (st) {
+    el.style.setProperty('--nick-grad', `linear-gradient(90deg, ${[...st.colors, st.colors[0]].join(', ')})`);
+    el.style.setProperty('--nick-glow', st.colors[0]);
+  }
+}
 const personaAvatarPath = (p) => (p && p.avatar_image_id ? `/v1/personas/${p.id}/avatar?v=${p.avatar_image_id}` : null);
 
 // shrink photos before upload (and turn iPhone HEIC into JPEG)
@@ -310,7 +394,7 @@ async function inboxLoop() {
 }
 
 // ------------------------------------------------------------------ layout
-const TABS = [['characters', 'Персонажи', 'face'], ['chats', 'Чаты', 'chat'], ['friends', 'Друзья', 'people'], ['profile', 'Профиль', 'user']];
+const TABS = [['characters', 'Персонажи', 'face'], ['feed', 'Лента', 'feed'], ['chats', 'Чаты', 'chat'], ['friends', 'Друзья', 'people'], ['profile', 'Профиль', 'user']];
 function tabPage(root, current, title, subtitle) {
   const page = h('div', { class: 'page' });
   if (title) page.append(h('div', { class: 'large-title' }, title));
@@ -331,7 +415,7 @@ const FINE_POINTER = window.matchMedia('(hover: hover) and (pointer: fine)');
 function sideNav() {
   const hash = location.hash || '#/characters';
   const current = /^#\/chats?(\/|$)/.test(hash) ? 'chats' : /^#\/friends/.test(hash) ? 'friends'
-    : /^#\/profile/.test(hash) ? 'profile' : 'characters';
+    : /^#\/(profile|user\/)/.test(hash) ? 'profile' : /^#\/feed/.test(hash) ? 'feed' : /^#\/coins/.test(hash) ? 'coins' : 'characters';
   const me = store.me || {};
   return h('aside', { class: 'sidenav', id: 'sidenav' },
     h('button', { class: 'side-brand', 'aria-label': 'GramSoul', onclick: () => { location.hash = '#/characters'; } },
@@ -342,12 +426,14 @@ function sideNav() {
         icon(ic, 22), h('span', { class: 'grow' }, label),
         (id === 'chats' || id === 'friends') ? h('span', { class: 'side-badge' + (n ? '' : ' hidden'), 'data-badge': id }, n) : null);
     })),
+    h('button', { class: 'side-link' + (current === 'coins' ? ' on' : ''), id: 'side-coins', onclick: () => { location.hash = '#/coins'; } },
+      icon('coin', 22), h('span', { class: 'grow' }, 'Монетки'), h('span', { class: 'side-coins', 'data-coins': '' }, me.coins != null ? String(me.coins) : '')),
     h('button', { class: 'btn primary wide side-create', id: 'side-create', onclick: createSheet }, icon('plus', 20), 'Создать'),
     h('div', { class: 'grow' }),
     h('button', { class: 'side-me', id: 'side-me', onclick: () => { location.hash = '#/profile'; } },
-      avatar(me.nick || '?', userAvatarPath(me), 36),
-      h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 'ellipsis', style: 'font-weight:600' }, me.nick || ''),
-        h('div', { class: 'faint small' }, 'Профиль'))));
+      framedAvatar(me, 36),
+      h('div', { class: 'grow', style: 'min-width:0' }, nickEl(me, 'ellipsis'),
+        h('div', { class: 'faint small' }, me.elite ? 'Elite' : 'Профиль'))));
 }
 
 function subPage(root, title, backHash, actions) {
@@ -454,7 +540,7 @@ function screenSetPassword(root) {
   const btn = h('button', { class: 'btn primary wide', id: 'set-password', type: 'submit', disabled: true }, 'Сохранить пароль');
   const upd = () => { btn.disabled = pw.value.length < 8 || !pw2.value; };
   [pw, pw2].forEach((x) => x.addEventListener('input', () => { err.textContent = ''; upd(); }));
-  const form = h('form', null, pw, pw2, h('div', { class: 'hint' }, 'Не короче 6 символов.'), err, btn);
+  const form = h('form', null, pw, pw2, h('div', { class: 'hint' }, 'Не короче 8 символов.'), err, btn);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (pw.value !== pw2.value) { err.textContent = 'Пароли не совпадают.'; return; }
@@ -481,10 +567,29 @@ function personaCard(p) {
   const path = personaAvatarPath(p);
   if (path) card.append(authImg(path, name));
   else card.append(h('div', { class: 'pcard-letter' }, name[0].toUpperCase()));
+  // the author under the description (a tap opens their profile), a heart for the favourites
+  const author = p.author && !p.mine ? h('span', { class: 'pcard-author', role: 'link', onclick: (e) => { e.stopPropagation(); location.hash = userPath(p.author); } },
+    framedAvatar(p.author, 18), nickEl(p.author, 'ellipsis')) : null;
   card.append(h('div', { class: 'pcard-shade' }),
-    h('div', { class: 'pcard-text' }, h('div', { class: 'pcard-name ellipsis' }, name), p.description ? h('div', { class: 'pcard-desc' }, p.description) : null));
+    h('div', { class: 'pcard-text' }, h('div', { class: 'pcard-name ellipsis' }, name), p.description ? h('div', { class: 'pcard-desc' }, p.description) : null,
+      author || (p.is_demo ? h('span', { class: 'pcard-author faint' }, 'GramSoul') : null)));
   if (p.status === 'draft') card.append(h('span', { class: 'pill pcard-pill' }, 'Черновик'));
   else if (p.mine && p.visibility === 'private') card.append(h('span', { class: 'pill lilac pcard-pill' }, 'Личный'));
+  if (p.status !== 'draft') {
+    const heart = h('span', { class: 'pcard-fav' + (p.favorite ? ' on' : ''), role: 'button', 'aria-label': 'В избранное', 'data-fav': name },
+      icon('heart', 18), p.favorites ? h('b', null, String(p.favorites)) : null);
+    heart.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try {
+        const r = await api(`/v1/personas/${p.id}/favorite`, { method: p.favorite ? 'DELETE' : 'PUT' });
+        Object.assign(p, r.persona);
+        heart.classList.toggle('on', !!p.favorite);
+        heart.replaceChildren(icon('heart', 18), p.favorites ? h('b', null, String(p.favorites)) : '');
+        toast(p.favorite ? 'Добавлено в избранное' : 'Убрано из избранного');
+      } catch (ex) { toast(ex.message); }
+    });
+    card.append(heart);
+  }
   return card;
 }
 
@@ -609,15 +714,17 @@ function storyItem(st) {
 function screenCharacters(root) {
   const page = tabPage(root, 'characters', 'Персонажи', (store.me && store.me.nick) || '');
   page.classList.add('page-wide');
-  let scope = sessionStorage.getItem('gs_scope') || 'all';
+  let scope = sessionStorage.getItem('gs_scope') || 'foryou';
+  if (!['foryou', 'new', 'favorites', 'mine', 'drafts'].includes(scope)) scope = 'foryou';
   let q = '';
   let seq = 0;
   let timer;
   const grid = h('div', { class: 'grid', id: 'personas' });
   const search = h('input', { class: 'field', id: 'persona-search', placeholder: 'Имя или #тег', type: 'search', autocomplete: 'off' });
-  const chips = h('div', { class: 'chips', style: 'margin-top:10px' });
-  const drawChips = () => chips.replaceChildren(...[['all', 'Все'], ['mine', 'Мои'], ['drafts', 'Черновики']].map(([id, l]) =>
-    h('button', { class: 'chip' + (scope === id ? ' on' : ''), onclick: () => { scope = id; sessionStorage.setItem('gs_scope', id); drawChips(); load(); } }, l)));
+  // «Для вас» — the most played and liked, «Новое», «Избранное», own characters and drafts
+  const chips = h('div', { class: 'tabs-line', id: 'persona-tabs' });
+  const drawChips = () => chips.replaceChildren(...[['foryou', 'Для вас'], ['new', 'Новое'], ['favorites', 'Избранное'], ['mine', 'Мои'], ['drafts', 'Черновики']].map(([id, l]) =>
+    h('button', { class: 'tab-line' + (scope === id ? ' on' : ''), id: 'scope-' + id, onclick: () => { scope = id; sessionStorage.setItem('gs_scope', id); drawChips(); load(); } }, l)));
   let load = async function () {
     const my = ++seq;
     try {
@@ -627,7 +734,8 @@ function screenCharacters(root) {
       if (!r.personas.length) grid.append(h('div', { class: 'muted', id: 'personas-empty' },
         scope === 'drafts' ? 'Черновиков нет.' : q ? 'Ничего не нашли.'
           : scope === 'mine' ? 'У тебя пока нет персонажей — создай первого.'
-            : 'Пока нет персонажей. Создай своего — или загляни позже, когда другие опубликуют.'));
+            : scope === 'favorites' ? 'Здесь появятся персонажи, которых ты отметишь сердечком.'
+              : 'Пока нет персонажей. Создай своего — или загляни позже, когда другие опубликуют.'));
     } catch (e) {
       if (my === seq) grid.replaceChildren(errorBox(e.message, load));
     }
@@ -849,7 +957,9 @@ function avatarSheet(name, description, onUse) {
       try {
         const r = await api('/v1/avatars/generate', { method: 'POST', body: { name: name || '', description: desc.value.trim(), style } });
         showResult(r.image_id, desc.value);
+        api('/v1/me').then((m) => setCoins(m.user.coins)).catch(() => {});
       } catch (e) {
+        if (e.code === 'no_coins') moneyError(e);
         err.textContent = e.message;
         gen.disabled = false;
         gen.textContent = 'Сгенерировать';
@@ -1465,7 +1575,8 @@ function screenChat(root, rid) {
       st.jobFresh = r.image_job && r.image_job.id;
       drawStatus();
       toBottom();
-    } catch (e) { toast(e.message); }
+      api('/v1/me').then((m) => setCoins(m.user.coins)).catch(() => {});
+    } catch (e) { moneyError(e); }
   }
   function chooseScene() {
     const room = st.room;
@@ -1656,8 +1767,9 @@ function screenFriends(root) {
       const r = await api('/v1/users/search?q=' + encodeURIComponent(q));
       if (my !== seq) return;
       results.replaceChildren(...r.users.map((x) => h('div', { class: 'list-item', 'data-user': x.user.nick },
-        avatar(x.user.nick, userAvatarPath(x.user), 44),
-        h('div', { class: 'grow' }, h('div', { class: 't ellipsis' }, x.user.nick), x.user.about ? h('div', { class: 's ellipsis' }, x.user.about) : null),
+        h('button', { class: 'user-open', onclick: () => { location.hash = userPath(x.user); } }, framedAvatar(x.user, 44),
+          h('div', { class: 'grow', style: 'min-width:0;text-align:left' }, h('div', { class: 't ellipsis' }, nickLine(x.user)),
+            x.user.about ? h('div', { class: 's ellipsis' }, x.user.about) : null)),
         relationButton(x))));
       if (!r.users.length) results.append(h('div', { class: 'muted' }, `Никого не нашли по «${q}».`));
     } catch (e) { if (my === seq) results.replaceChildren(h('div', { class: 'error' }, e.message)); }
@@ -1693,9 +1805,9 @@ function screenFriends(root) {
       items.push(h('div', { class: 'section' }, 'Друзья'));
       if (!f.friends.length) items.push(h('div', { class: 'muted' }, 'Пока никого. Найди друга по нику и отправь заявку.'));
       for (const u of f.friends) {
-        items.push(h('div', { class: 'list-item', id: 'friend-' + u.nick },
-          avatar(u.nick, userAvatarPath(u), 42, u.online ? h('span', { class: 'dot' }) : null),
-          h('div', { class: 'grow' }, h('div', { class: 't' }, u.nick),
+        items.push(h('button', { class: 'list-item', id: 'friend-' + u.nick, onclick: () => { location.hash = userPath(u); } },
+          framedAvatar(u, 42, undefined, u.online ? h('span', { class: 'dot' }) : null),
+          h('div', { class: 'grow' }, h('div', { class: 't' }, nickLine(u)),
             h('div', { class: 's', style: u.online ? 'color:var(--green)' : '' }, u.online ? 'в сети' : lastSeen(u.last_seen_at)))));
       }
       lists.replaceChildren(...items);
@@ -1746,11 +1858,17 @@ function trashButton(label, question, text, onYes) {
 async function screenProfile(root) {
   const page = tabPage(root, 'profile', 'Профиль');
   let u;
-  try { u = (await api('/v1/me')).user; store.me = u; } catch (e) { page.append(errorBox(e.message, () => render())); return; }
-  const av = h('button', { class: 'avatar', id: 'profile-avatar', style: `width:104px;height:104px;font-size:44px;margin:10px auto 6px;border:0;background:${colorFor(u.nick)}` });
+  await loadLooks();
+  try { u = (await api('/v1/me')).user; store.me = u; setCoins(u.coins); } catch (e) { page.append(errorBox(e.message, () => render())); return; }
+  const av = h('button', { class: 'avatar', id: 'profile-avatar', style: `width:104px;height:104px;font-size:44px;border:0;background:${colorFor(u.nick)}` });
+  const avBox = h('div', { class: 'profile-av-box' });
+  const banner = h('div', { class: 'banner profile-banner hidden' });
   const drawAv = () => {
     av.replaceChildren((u.nick[0] || '?').toUpperCase());
     if (u.avatar_image_id) av.append(authImg(userAvatarPath(u), u.nick));
+    avBox.replaceChildren(ringAround(av, u.frame, 104));
+    banner.classList.toggle('hidden', !u.banner_image_id);
+    if (u.banner_image_id) fill(banner, authImg('/v1/images/' + u.banner_image_id, ''));
   };
   drawAv();
   const pick = async () => {
@@ -1772,7 +1890,8 @@ async function screenProfile(root) {
   });
 
   // nick: can be changed (unique, same rules as at registration)
-  const nickText = h('span', { id: 'profile-nick' }, u.nick);
+  const nickText = h('span', { id: 'profile-nick', class: 'nick' }, u.nick);
+  applyNickStyle(nickText, u.nick_style);
   const nickRow = h('div', { class: 'row', style: 'justify-content:center;gap:6px;font-size:24px;font-weight:700' }, nickText,
     h('button', { class: 'icon-btn small', id: 'nick-edit', 'aria-label': 'Изменить ник', title: 'Изменить ник', onclick: () => {
       const field = h('input', { class: 'field', id: 'nick-new', value: u.nick, maxlength: 20, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
@@ -1859,13 +1978,25 @@ async function screenProfile(root) {
     } catch (e) { toast(e.message); }
   });
 
-  put(page, av,
+  const looks = looksEditor(u, (nu) => { u = nu; drawAv(); applyNickStyle(nickText, u.nick_style); eliteNote.replaceChildren(...eliteLine()); });
+  const eliteLine = () => [eliteBadge(u)];
+  const eliteNote = h('span', null, ...eliteLine());
+  const coinsCard = h('button', { class: 'card coins-card', id: 'open-coins', onclick: () => { location.hash = '#/coins'; } },
+    icon('coin', 28), h('div', { class: 'grow', style: 'text-align:left' }, h('div', { style: 'font-weight:600' }, 'Монетки и Elite'),
+      h('div', { class: 'muted small' }, 'Баланс: ', h('b', { 'data-coins': '' }, String(u.coins)),
+        u.elite ? ' · Elite до ' + new Date(u.elite_until).toLocaleDateString('ru-RU') : ' · картинки и аватары за монетки')),
+    icon('forward', 18));
+  const pinsBox = h('div');
+  pinsEditor(u).then((b) => pinsBox.replaceWith(b));
+  put(page, banner, avBox,
     h('div', { class: 'row', style: 'justify-content:center' },
       h('button', { class: 'link accent', onclick: pick }, u.avatar_image_id ? 'Сменить фото' : 'Добавить фото'),
       u.avatar_image_id ? h('button', { class: 'link', onclick: async () => {
         try { u = (await api('/v1/me', { method: 'PATCH', body: { avatar_image_id: '' } })).user; drawAv(); } catch (e) { toast(e.message); }
       } }, 'Убрать') : null),
-    nickRow,
+    nickRow, h('div', { class: 'center' }, eliteNote,
+      h('button', { class: 'link accent', id: 'open-my-profile', onclick: () => { location.hash = userPath(u); } }, 'Мой публичный профиль')),
+    coinsCard, looks, pinsBox,
     h('label', { class: 'lbl' }, 'Пол — так к тебе будут обращаться персонажи'), genderSeg,
     h('label', { class: 'lbl' }, 'О себе'), about, saveAbout,
     h('div', { class: 'card', style: 'margin-top:20px' },
@@ -1906,6 +2037,358 @@ async function screenProfile(root) {
     h('div', { class: 'center faint small', id: 'app-version', style: 'margin-top:18px' }, 'GramSoul Web ' + WEB_VERSION));
 }
 
+// ------------------------------------------------------------------ time, coins in the sidebar
+function ago(ts) {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return 'только что';
+  if (s < 3600) return `${Math.floor(s / 60)} мин назад`;
+  if (s < 86400) return `${Math.floor(s / 3600)} ч назад`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)} д назад`;
+  return new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+function setCoins(n) {
+  if (store.me) store.me = { ...store.me, coins: n };
+  document.querySelectorAll('[data-coins]').forEach((x) => { x.textContent = String(n); });
+}
+/** «Не хватает монеток» opens the coins page; other errors are a toast. */
+function moneyError(e) {
+  if (e && e.code === 'no_coins') {
+    confirmSheet('Не хватает монеток', e.message, 'Пополнить', false).then((ok) => { if (ok) location.hash = '#/coins'; });
+    return;
+  }
+  if (e && e.code === 'elite_required') {
+    confirmSheet('Нужна подписка Elite', e.message, 'Подробнее', false).then((ok) => { if (ok) location.hash = '#/coins'; });
+    return;
+  }
+  toast(e.message);
+}
+
+// ------------------------------------------------------------------ the feed («Лента»)
+function richPostText(text, onTag) {
+  const out = [];
+  const re = /#([\wА-Яа-яЁё]{2,30})/g;
+  let i = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    if (m.index > i) out.push(text.slice(i, m.index));
+    const tag = m[1];
+    out.push(h('button', { class: 'tag-link', onclick: () => onTag && onTag(tag.toLowerCase()) }, '#' + tag));
+    i = m.index + m[0].length;
+  }
+  if (i < text.length) out.push(text.slice(i));
+  return out;
+}
+function postCard(p, { onTag, onRemoved } = {}) {
+  const el = h('article', { class: 'post', 'data-post': p.id });
+  const follow = !p.mine && !p.following ? h('button', { class: 'link accent follow-btn', onclick: async (e) => {
+    const b = e.currentTarget;
+    try { await api(`/v1/users/${p.author.id}/follow`, { method: 'PUT' }); b.replaceWith(h('span', { class: 'faint small' }, 'вы подписаны')); } catch (ex) { toast(ex.message); }
+  } }, 'Подписаться') : null;
+  const menu = p.mine ? h('button', { class: 'icon-btn small', 'aria-label': 'Удалить', onclick: async () => {
+    if (!(await confirmSheet('Удалить публикацию?', 'Вместе с комментариями. Это нельзя отменить.', 'Удалить', true))) return;
+    try { await api('/v1/posts/' + p.id, { method: 'DELETE' }); el.remove(); if (onRemoved) onRemoved(); } catch (ex) { toast(ex.message); }
+  } }, icon('trash', 18)) : null;
+  const head = h('div', { class: 'post-head' },
+    h('button', { class: 'post-author', onclick: () => { location.hash = userPath(p.author); } }, framedAvatar(p.author, 42),
+      h('div', { style: 'min-width:0;text-align:left' }, nickLine(p.author), h('div', { class: 'faint small' }, ago(p.created_at)))),
+    follow, h('div', { class: 'grow' }), menu);
+  const imgs = p.images.length ? h('div', { class: 'post-images n' + p.images.length },
+    p.images.map((iid) => {
+      const im = authImg(`/v1/posts/${p.id}/images/${iid}`, '');
+      const b = h('button', { class: 'post-img', onclick: () => {
+        authImage(`/v1/posts/${p.id}/images/${iid}`).then((u) => {
+          const v = h('div', { class: 'viewer', onclick: () => v.remove() }, h('img', { src: u, alt: '' }));
+          document.body.append(v);
+        }).catch(() => {});
+      } }, im);
+      return b;
+    })) : null;
+  const likeBtn = h('button', { class: 'post-act' + (p.liked ? ' on' : ''), 'data-like': p.id });
+  const drawLike = () => likeBtn.replaceChildren(icon('heart', 20), h('span', null, String(p.likes || 0)));
+  drawLike();
+  likeBtn.addEventListener('click', async () => {
+    try {
+      const r = await api(`/v1/posts/${p.id}/like`, { method: p.liked ? 'DELETE' : 'PUT' });
+      Object.assign(p, r.post);
+      likeBtn.classList.toggle('on', !!p.liked);
+      drawLike();
+    } catch (ex) { toast(ex.message); }
+  });
+  const comBox = h('div', { class: 'post-comments hidden' });
+  const comBtn = h('button', { class: 'post-act', 'data-comments': p.id }, icon('comment', 20), h('span', null, String(p.comments || 0)));
+  comBtn.addEventListener('click', () => {
+    comBox.classList.toggle('hidden');
+    if (!comBox.classList.contains('hidden')) loadComments();
+  });
+  async function loadComments() {
+    fill(comBox, h('div', { class: 'faint small' }, 'Загрузка…'));
+    try {
+      const r = await api(`/v1/posts/${p.id}/comments`);
+      const input = h('input', { class: 'field', placeholder: 'Комментарий…', maxlength: 1000, 'data-comment-input': p.id });
+      const send = h('button', { class: 'btn primary small', 'data-comment-send': p.id }, 'Отправить');
+      const post = async () => {
+        if (!input.value.trim()) return;
+        send.disabled = true;
+        try {
+          await api(`/v1/posts/${p.id}/comments`, { method: 'POST', body: { text: input.value.trim() } });
+          p.comments = (p.comments || 0) + 1;
+          comBtn.querySelector('span').textContent = String(p.comments);
+          loadComments();
+        } catch (ex) { toast(ex.message); send.disabled = false; }
+      };
+      send.addEventListener('click', post);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); post(); } });
+      fill(comBox, r.comments.map((c) => h('div', { class: 'comment' },
+        h('button', { class: 'comment-av', onclick: () => { location.hash = userPath(c.author); } }, framedAvatar(c.author, 30)),
+        h('div', { class: 'grow', style: 'min-width:0' }, h('div', null, nickLine(c.author, 'small'), h('span', { class: 'faint small' }, ' · ' + ago(c.created_at))),
+          h('div', { class: 'comment-text' }, c.text)),
+        c.can_delete ? h('button', { class: 'icon-btn small', 'aria-label': 'Удалить', onclick: async () => {
+          try { await api('/v1/comments/' + c.id, { method: 'DELETE' }); p.comments = Math.max(0, p.comments - 1); comBtn.querySelector('span').textContent = String(p.comments); loadComments(); } catch (ex) { toast(ex.message); }
+        } }, icon('close', 16)) : null)),
+      h('div', { class: 'row', style: 'margin-top:8px' }, input, send));
+    } catch (ex) { fill(comBox, errorBox(ex.message, loadComments)); }
+  }
+  put(el, head, p.text ? h('div', { class: 'post-text' }, richPostText(p.text, onTag)) : null, imgs,
+    h('div', { class: 'post-actions' }, likeBtn, comBtn), comBox);
+  return el;
+}
+
+function postComposer(onPosted) {
+  const text = autoGrow(h('textarea', { class: 'field', id: 'post-text', rows: 2, maxlength: 2000, placeholder: 'Чем хочешь поделиться? #тема' }), 240);
+  const images = [];
+  const thumbs = h('div', { class: 'composer-thumbs' });
+  const drawThumbs = () => fill(thumbs, images.map((im, i) => h('div', { class: 'thumb' }, authImg('/v1/images/' + im.id, ''),
+    h('button', { class: 'thumb-x', 'aria-label': 'Убрать', onclick: () => { images.splice(i, 1); drawThumbs(); upd(); } }, icon('close', 14)))));
+  const addImg = h('button', { class: 'link', id: 'post-add-image' }, icon('image', 20), ' Картинка');
+  const go = h('button', { class: 'btn primary small', id: 'post-publish', disabled: true }, 'Опубликовать');
+  const upd = () => { go.disabled = !text.value.trim() && !images.length; addImg.disabled = images.length >= 4; };
+  text.addEventListener('input', upd);
+  addImg.addEventListener('click', async () => {
+    const f = await pickFile();
+    if (!f) return;
+    addImg.disabled = true;
+    try { images.push(await uploadImage(f, 1600)); drawThumbs(); } catch (e) { toast(e.message); }
+    upd();
+  });
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      const r = await api('/v1/posts', { method: 'POST', body: { text: text.value.trim(), image_ids: images.map((x) => x.id) } });
+      text.value = ''; images.length = 0; drawThumbs(); upd();
+      onPosted(r.post);
+    } catch (e) { toast(e.message); upd(); }
+  });
+  return h('div', { class: 'card composer-card' }, h('div', { class: 'row', style: 'align-items:flex-start' }, framedAvatar(store.me || {}, 40), text),
+    thumbs, h('div', { class: 'row', style: 'margin-top:8px' }, addImg, h('div', { class: 'grow' }), go));
+}
+
+function screenFeed(root) {
+  const page = tabPage(root, 'feed', 'Лента', 'Публикации игроков: истории, арты, находки');
+  let tab = sessionStorage.getItem('gs_feed') || 'all';
+  let tag = null;
+  let next = null;
+  const tabs = h('div', { class: 'tabs-line', id: 'feed-tabs' });
+  const tagBar = h('div', { class: 'hidden', id: 'feed-tag' });
+  const list = h('div', { id: 'posts' });
+  const more = h('button', { class: 'btn ghost wide hidden', id: 'posts-more', style: 'margin-top:8px' }, 'Показать ещё');
+  const drawTabs = () => tabs.replaceChildren(...[['all', 'Все'], ['following', 'Подписки']].map(([id, l]) =>
+    h('button', { class: 'tab-line' + (tab === id ? ' on' : ''), id: 'feed-' + id, onclick: () => { tab = id; tag = null; sessionStorage.setItem('gs_feed', id); drawTabs(); load(); } }, l)));
+  const onTag = (t) => { tag = t; load(); };
+  async function load(append = false) {
+    if (!append) fill(list, h('div', { class: 'muted' }, 'Загрузка…'));
+    tagBar.classList.toggle('hidden', !tag);
+    if (tag) fill(tagBar, h('div', { class: 'row', style: 'margin:6px 0 10px' }, h('span', { class: 'pill' }, '#' + tag),
+      h('button', { class: 'link', onclick: () => { tag = null; load(); } }, 'Все публикации')));
+    try {
+      const qs = new URLSearchParams({ tab });
+      if (tag) qs.set('tag', tag);
+      if (append && next) qs.set('before', next);
+      const r = await api('/v1/posts?' + qs);
+      if (!append) list.replaceChildren();
+      r.posts.forEach((p) => list.append(postCard(p, { onTag })));
+      next = r.next;
+      more.classList.toggle('hidden', !next);
+      if (!list.children.length) list.append(h('div', { class: 'muted', id: 'posts-empty' },
+        tab === 'following' ? 'Здесь будут публикации тех, на кого ты подписан.' : 'Пока ни одной публикации — будь первым!'));
+    } catch (e) { fill(list, errorBox(e.message, () => load())); }
+  }
+  more.addEventListener('click', () => load(true));
+  drawTabs();
+  put(page, postComposer((p) => {
+    if (tab === 'all' && !tag) { const empty = $('#posts-empty', list); if (empty) empty.remove(); list.prepend(postCard(p, { onTag })); } else load();
+    toast('Опубликовано');
+  }),
+    tabs, tagBar, list, more);
+  load();
+}
+
+// ------------------------------------------------------------------ a player's profile
+async function screenUser(root, uid) {
+  const page = subPage(root, '', '#/feed');
+  page.classList.add('page-wide');
+  await loadLooks();
+  let r;
+  try { r = await api('/v1/users/' + uid); } catch (e) { page.append(errorBox(e.message, () => render())); return; }
+  const u = r.user;
+  const mine = r.relation === 'self';
+  $('.title', page).textContent = u.nick;
+  const banner = h('div', { class: 'banner' + (u.banner_image_id ? '' : ' empty') });
+  if (u.banner_image_id) banner.append(authImg(`/v1/users/${u.id}/banner?v=${u.banner_image_id}`, ''));
+  const counts = h('div', { class: 'profile-counts' },
+    h('span', null, h('b', { id: 'followers-count' }, String(r.followers)), ' подписчиков'),
+    h('span', null, h('b', null, String(r.posts)), ' публикаций'));
+  let following = r.is_following;
+  const followBtn = mine ? null : h('button', { class: 'btn small ' + (following ? 'ghost' : 'primary'), id: 'follow-toggle' }, following ? 'Вы подписаны' : 'Подписаться');
+  if (followBtn) followBtn.addEventListener('click', async () => {
+    try {
+      const c = await api(`/v1/users/${u.id}/follow`, { method: following ? 'DELETE' : 'PUT' });
+      following = c.is_following;
+      followBtn.className = 'btn small ' + (following ? 'ghost' : 'primary');
+      followBtn.textContent = following ? 'Вы подписаны' : 'Подписаться';
+      $('#followers-count').textContent = String(c.followers);
+    } catch (e) { toast(e.message); }
+  });
+  const friendBtn = mine ? h('button', { class: 'btn small ghost', onclick: () => { location.hash = '#/profile'; } }, icon('edit', 18), 'Оформление')
+    : (r.relation === 'none' || r.relation === 'outgoing_declined') ? h('button', { class: 'btn small ghost', id: 'friend-add', onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      try { await api('/v1/friends/request', { method: 'POST', body: { user_id: u.id } }); toast('Заявка отправлена'); } catch (ex) { toast(ex.message); }
+    } }, 'В друзья') : r.relation === 'friends' || r.relation === 'outgoing_accepted' ? h('span', { class: 'pill lilac' }, 'В друзьях') : null;
+  const pins = (r.pinned_stories || []).map((st) => storyItem(st));
+  const posts = h('div', { id: 'user-posts' });
+  put(page, h('div', { class: 'profile-head' }, banner,
+    h('div', { class: 'profile-id' }, framedAvatar(u, 96),
+      h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 'profile-nick', id: 'user-nick' }, nickLine(u)),
+        u.about ? h('div', { class: 'muted', style: 'white-space:pre-wrap;margin-top:4px' }, u.about) : null, counts),
+      h('div', { class: 'row', style: 'gap:8px' }, followBtn, friendBtn))),
+  pins.length ? [h('div', { class: 'section' }, icon('pin', 14), ' Закреплённые истории'), h('div', { id: 'pinned' }, pins)] : null,
+  h('div', { class: 'section' }, 'Публикации'), posts);
+  try {
+    const pr = await api('/v1/posts?' + new URLSearchParams({ tab: 'user', user_id: u.id }));
+    fill(posts, pr.posts.length ? pr.posts.map((p) => postCard(p)) : h('div', { class: 'muted' }, 'Пока ни одной публикации.'));
+  } catch (e) { fill(posts, errorBox(e.message)); }
+}
+
+// ------------------------------------------------------------------ coins and Elite
+async function screenCoins(root, paymentId) {
+  const page = subPage(root, 'Монетки и Elite', '#/profile');
+  page.classList.add('page-wide');
+  let s;
+  try { s = await api('/v1/shop'); } catch (e) { page.append(errorBox(e.message, () => render())); return; }
+  setCoins(s.coins);
+  if (paymentId) {  // back from YooKassa
+    try {
+      const p = (await api('/v1/payments/' + paymentId)).payment;
+      toast(p.status === 'succeeded' ? 'Оплата прошла — спасибо!' : p.status === 'canceled' ? 'Оплата отменена' : 'Ждём подтверждения оплаты…');
+    } catch (_) {}
+  }
+  const buy = async (prod, btn) => {
+    btn.disabled = true;
+    try {
+      const p = (await api('/v1/payments', { method: 'POST', body: { product: prod.id } })).payment;
+      if (p.confirmation_url) { location.href = p.confirmation_url; return; }
+      if (s.test_mode) {
+        const ok = await confirmSheet('Тестовая оплата', `${prod.title} за ${prod.price_rub} ₽. Это тестовый режим: деньги не списываются.`, 'Оплатить (тест)', false);
+        if (ok) {
+          const r = await api(`/v1/payments/${p.id}/confirm-test`, { method: 'POST' });
+          s = r.shop;
+          toast('Готово!');
+          render();
+        }
+      } else {
+        sheet('Оплата скоро', h('p', { class: 'muted', style: 'line-height:1.5' },
+          'Оплата через ЮKassa пока не подключена — мы уже готовим её. Заказ сохранён, деньги не списаны.'),
+        h('div', { class: 'faint small' }, 'Номер заказа: ' + p.id));
+      }
+    } catch (e) { toast(e.message); }
+    btn.disabled = false;
+  };
+  const elite = s.products.find((p) => p.kind === 'elite');
+  const eliteBtn = h('button', { class: 'btn primary', id: 'buy-elite' }, s.elite.active ? 'Продлить' : 'Оформить Elite', ' · ', elite.price_rub + ' ₽/мес');
+  eliteBtn.addEventListener('click', () => buy(elite, eliteBtn));
+  const packs = s.products.filter((p) => p.kind === 'coins').map((p) => {
+    const b = h('button', { class: 'pack', 'data-product': p.id }, p.badge ? h('span', { class: 'pill pack-badge' }, p.badge) : null,
+      h('div', { class: 'pack-coins' }, icon('coin', 22), String(p.coins)), h('div', { class: 'pack-price' }, p.price_rub + ' ₽'));
+    b.addEventListener('click', () => buy(p, b));
+    return b;
+  });
+  const hist = h('div', { id: 'coins-history' });
+  put(page,
+    h('div', { class: 'coins-hero' }, h('div', { class: 'faint small' }, 'Баланс'),
+      h('div', { class: 'coins-balance' }, icon('coin', 34), h('span', { id: 'coins-balance' }, String(s.coins))),
+      h('div', { class: 'muted small' }, `Картинка сцены — ${s.costs.scene_image} монеток, ИИ-аватар — ${s.costs.avatar}. Чат и озвучка — бесплатно.`)),
+    h('div', { class: 'elite-card' }, h('div', { class: 'row' }, h('div', { class: 'elite-title' }, icon('crown', 22), 'GramSoul Elite'),
+      h('div', { class: 'grow' }), s.elite.active ? h('span', { class: 'pill green', id: 'elite-status' }, 'активна до ' + new Date(s.elite.until).toLocaleDateString('ru-RU')) : null),
+    h('ul', { class: 'elite-perks' }, s.elite_perks.map((x) => h('li', null, icon('check', 16), x))), eliteBtn),
+    h('div', { class: 'section' }, 'Пополнить монетки'), h('div', { class: 'packs' }, packs),
+    h('div', { class: 'hint' }, s.provider === 'stub' ? 'Оплата через ЮKassa скоро. Цены предварительные.' : 'Оплата через ЮKassa — банковской картой или СБП.'),
+    h('div', { class: 'section' }, 'История'), hist);
+  try {
+    const items = (await api('/v1/me/coins/history')).items;
+    fill(hist, items.length ? items.map((i) => h('div', { class: 'list-item', style: 'cursor:default' },
+      h('div', { class: 'grow' }, h('div', { class: 't' }, i.title), h('div', { class: 's' }, ago(i.created_at))),
+      h('b', { style: `color:${i.delta > 0 ? 'var(--green)' : 'var(--text)'}` }, (i.delta > 0 ? '+' : '') + i.delta))) : h('div', { class: 'muted' }, 'Пока пусто.'));
+  } catch (_) {}
+}
+
+// ------------------------------------------------------------------ the look of the own profile
+function looksEditor(u, onChange) {
+  const box = h('div', { class: 'card', id: 'looks-card', style: 'margin-top:14px' });
+  const draw = () => {
+    const ch = u.looks_choice || { nick_style: u.nick_style, frame: u.frame, banner_image_id: u.banner_image_id };
+    const locked = !u.elite;
+    const set = async (body) => {
+      try { u = (await api('/v1/me/looks', { method: 'PATCH', body })).user; store.me = { ...(store.me || {}), ...u }; onChange(u); draw(); } catch (e) { moneyError(e); }
+    };
+    const styleBtns = [h('button', { class: 'look-opt' + (!ch.nick_style ? ' on' : ''), 'data-nick-style': 'none', onclick: () => set({ nick_style: '' }) }, nickEl(u, '', '')),
+      ...LOOKS.nick_styles.map((st) => h('button', { class: 'look-opt' + (ch.nick_style === st.id ? ' on' : '') + (locked ? ' locked' : ''), 'data-nick-style': st.id,
+        title: st.label, onclick: () => (locked ? moneyError({ code: 'elite_required', message: 'Светящийся ник — с подпиской Elite.' }) : set({ nick_style: st.id })) },
+      nickEl(u, '', st.id), locked ? icon('lock', 14) : null))];
+    const frameBtns = [h('button', { class: 'look-frame' + (!ch.frame ? ' on' : ''), 'data-frame-opt': 'none', onclick: () => set({ frame: '' }) }, framedAvatar(u, 44, ''), h('span', null, 'Без рамки')),
+      ...LOOKS.frames.map((f) => h('button', { class: 'look-frame' + (ch.frame === f.id ? ' on' : '') + (f.elite && locked ? ' locked' : ''), 'data-frame-opt': f.id,
+        onclick: () => (f.elite && locked ? moneyError({ code: 'elite_required', message: 'Эта рамка — с подпиской Elite.' }) : set({ frame: f.id })) },
+      framedAvatar(u, 44, f.id), h('span', null, f.label, f.elite ? ' ' : '', f.elite ? icon('crown', 12) : null)))];
+    const bannerPrev = h('div', { class: 'banner small' + (ch.banner_image_id ? '' : ' empty') });
+    if (ch.banner_image_id) bannerPrev.append(authImg('/v1/images/' + ch.banner_image_id, ''));
+    const bannerBtn = h('button', { class: 'btn ghost small', id: 'banner-upload', onclick: async () => {
+      if (locked) { moneyError({ code: 'elite_required', message: 'Баннер в профиле — с подпиской Elite.' }); return; }
+      const f = await pickFile();
+      if (!f) return;
+      try { const img = await uploadImage(f, 1600); await set({ banner_image_id: img.id }); toast('Баннер обновлён'); } catch (e) { toast(e.message); }
+    } }, locked ? icon('lock', 16) : icon('image', 16), ch.banner_image_id ? 'Сменить баннер' : 'Загрузить баннер');
+    fill(box, h('div', { class: 'row' }, h('div', { style: 'font-weight:600' }, 'Оформление профиля'), h('div', { class: 'grow' }),
+      u.elite ? h('span', { class: 'elite-badge' }, icon('crown', 12), 'Elite') : h('button', { class: 'link accent', onclick: () => { location.hash = '#/coins'; } }, 'Elite')),
+    h('label', { class: 'lbl' }, 'Ник'), h('div', { class: 'look-grid' }, styleBtns),
+    h('label', { class: 'lbl' }, 'Рамка вокруг фото'), h('div', { class: 'frame-grid' }, frameBtns),
+    h('label', { class: 'lbl' }, 'Баннер профиля'), bannerPrev,
+    h('div', { class: 'row', style: 'margin-top:8px' }, bannerBtn, ch.banner_image_id ? h('button', { class: 'link', onclick: () => set({ banner_image_id: '' }) }, 'Убрать') : null),
+    locked ? h('div', { class: 'hint' }, 'Светящийся ник, особые рамки и баннер — с подпиской Elite.') : null);
+  };
+  draw();
+  return box;
+}
+
+async function pinsEditor(u) {
+  const box = h('div', { class: 'card', id: 'pins-card', style: 'margin-top:14px' });
+  let mine = [];
+  let pinned = [];
+  try {
+    mine = (await api('/v1/stories')).stories.filter((s) => s.visibility === 'public' && !s.is_demo);
+    pinned = ((await api('/v1/users/' + u.id)).pinned_stories || []).map((s) => s.id);
+  } catch (_) {}
+  const draw = () => fill(box, h('div', { style: 'font-weight:600' }, icon('pin', 16), ' Закреплённые истории'),
+    h('div', { class: 'muted small', style: 'margin:6px 0 8px' }, `До ${LOOKS.max_pins} своих опубликованных историй — их видно на твоём профиле.`),
+    mine.length ? mine.map((s) => {
+      const on = pinned.includes(s.id);
+      return h('button', { class: 'list-item pin-item' + (on ? ' on' : ''), 'data-pin': s.title, onclick: async () => {
+        const nextIds = on ? pinned.filter((x) => x !== s.id) : [...pinned, s.id];
+        if (nextIds.length > LOOKS.max_pins) { toast(`Можно закрепить до ${LOOKS.max_pins} историй`); return; }
+        try { pinned = (await api('/v1/me/pins', { method: 'PUT', body: { story_ids: nextIds } })).pinned_stories.map((x) => x.id); draw(); } catch (e) { toast(e.message); }
+      } }, h('div', { class: 'grow t ellipsis' }, s.title), on ? h('span', { class: 'pill' }, icon('pin', 12), ' закреплена') : h('span', { class: 'faint small' }, 'закрепить'));
+    }) : h('div', { class: 'faint small' }, 'Опубликуй историю — и её можно будет закрепить здесь.'));
+  draw();
+  return box;
+}
+
 // ------------------------------------------------------------------ router
 const ROUTES = [
   [/^#\/login$/, screenLogin],
@@ -1919,6 +2402,9 @@ const ROUTES = [
   [/^#\/chat\/([\w-]+)$/, screenChat],
   [/^#\/friends$/, screenFriends],
   [/^#\/profile$/, screenProfile],
+  [/^#\/feed$/, screenFeed],
+  [/^#\/user\/([\w-]+)$/, screenUser],
+  [/^#\/coins(?:\?payment=([\w-]+))?$/, screenCoins],
 ];
 let cleanup = null;
 let renderSeq = 0;

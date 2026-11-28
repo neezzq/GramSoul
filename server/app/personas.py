@@ -94,18 +94,19 @@ def can_view(row, user: User) -> bool:
     return row["author_id"] == user.id or (row["visibility"] == "public" and row["status"] == "published")
 
 
-def persona_dict(d: Database, row, user: User) -> dict:
+def persona_dict(d: Database, row, user: User, cache: dict | None = None) -> dict:
+    from .looks import author_of
     mine = row["author_id"] == user.id
-    author = None
-    if row["author_id"]:
-        a = d.one("SELECT public_id, nick FROM users WHERE id=?", (row["author_id"],))
-        author = {"id": a["public_id"], "nick": a["nick"]} if a else None
+    author = author_of(d, row["author_id"], cache)
     out = {
         "id": row["public_id"], "name": row["name"], "avatar_image_id": row["avatar_image_id"],
         "description": row["description"], "first_message": row["first_message"],
         "tags": json.loads(row["tags"] or "[]"), "visibility": row["visibility"], "status": row["status"],
         "is_demo": bool(row["is_demo"]), "author": author, "mine": mine, "updated_at": row["updated_at"],
         "voice": row["voice"] or "", "voice_manner": row["voice_manner"] or "", "voice_timbre": row["voice_timbre"] or "",
+        "favorite": d.one("SELECT 1 FROM favorites WHERE user_id=? AND persona_id=?", (user.id, row["id"])) is not None,
+        "favorites": d.one("SELECT COUNT(*) n FROM favorites WHERE persona_id=?", (row["id"],))["n"],
+        "chats_count": d.one("SELECT COUNT(*) n FROM room_personas WHERE persona_id=?", (row["id"],))["n"],
     }
     if mine:  # what the model gets besides the card — only the author sees it
         out["backstory"] = row["backstory"]
@@ -194,9 +195,23 @@ def get(d: Database, user: User, pid: str) -> dict:
     return {"persona": persona_dict(d, visible_persona(d, user, pid), user)}
 
 
+_PUBLIC = "visibility='public' AND status='published'"
+_POPULARITY = ("((SELECT COUNT(*) FROM room_personas rp WHERE rp.persona_id=personas.id) + "
+               "3 * (SELECT COUNT(*) FROM favorites f WHERE f.persona_id=personas.id))")
+
+
 def listing(d: Database, user: User, q: str = "", scope: str = "all") -> dict:
-    """scope: all = mine + public of others, mine, drafts, public."""
-    if scope == "mine":
+    """scope: foryou = public characters, the most played and liked first; new = public, newest first;
+    favorites = the player's favourites; mine; drafts; all = mine + public of others (older apps); public."""
+    if scope == "foryou":
+        rows = d.all(f"SELECT * FROM personas WHERE {_PUBLIC} ORDER BY {_POPULARITY} DESC, is_demo DESC, updated_at DESC LIMIT 500")
+    elif scope == "new":
+        rows = d.all(f"SELECT * FROM personas WHERE {_PUBLIC} ORDER BY created_at DESC LIMIT 500")
+    elif scope == "favorites":
+        rows = d.all("SELECT p.* FROM favorites f JOIN personas p ON p.id=f.persona_id WHERE f.user_id=? "
+                     f"AND (p.author_id=? OR (p.{_PUBLIC.replace(' AND ', ' AND p.')})) ORDER BY f.created_at DESC",
+                     (user.id, user.id))
+    elif scope == "mine":
         rows = d.all("SELECT * FROM personas WHERE author_id=? ORDER BY updated_at DESC", (user.id,))
     elif scope == "drafts":
         rows = d.all("SELECT * FROM personas WHERE author_id=? AND status='draft' ORDER BY updated_at DESC", (user.id,))
@@ -213,7 +228,17 @@ def listing(d: Database, user: User, q: str = "", scope: str = "all") -> dict:
             hay = (r["name"] + " " + " ".join(json.loads(r["tags"] or "[]"))).casefold().replace("ё", "е")
             return all(w.replace("ё", "е") in hay for w in words)
         rows = [r for r in rows if hit(r)]
-    return {"personas": [persona_dict(d, r, user) for r in rows[:100]]}
+    cache: dict = {}
+    return {"personas": [persona_dict(d, r, user, cache) for r in rows[:100]]}
+
+
+def set_favorite(d: Database, user: User, pid: str, on: bool) -> dict:
+    row = visible_persona(d, user, pid)
+    if on:
+        d.run("INSERT OR IGNORE INTO favorites(user_id, persona_id, created_at) VALUES(?,?,?)", (user.id, row["id"], now_ms()))
+    else:
+        d.run("DELETE FROM favorites WHERE user_id=? AND persona_id=?", (user.id, row["id"]))
+    return {"persona": persona_dict(d, row, user)}
 
 
 # ---------------------------------------------------------------------------
@@ -361,14 +386,22 @@ async def generate_avatar(d: Database, user: User, body: AvatarIn) -> dict:
         raise ApiError(400, "too_short", "Опиши внешность или напиши, кто это — например: Лелуш Ви Британия из аниме Код Гиасс.")
     if not settings.cloud_available:
         raise ApiError(503, "cloud_off", "Облачный ИИ на сервере не настроен.")
+    from . import coins
+    ref = new_id()
+    with d.tx():
+        coins.charge(d, user.id, settings.cost_avatar, "avatar", ref)
     try:
         subject = await _visual_subject(d, user, desc)
         prompt = build_avatar_prompt(body.style, subject, body.name.strip()[:60])
         img = await llm.generate_image(prompt, aspect_ratio="2:3")
         usage.record(d, user.id, "avatar", settings.cloud_image_model, img)
         data, w, h = await asyncio.to_thread(process_image, img.data, 1024, (2, 3))
-    except llm.LLMError as e:
-        raise ApiError(502, "ai_failed", str(e))
+    except Exception as e:
+        with d.tx():
+            coins.credit(d, user.id, settings.cost_avatar, "avatar_refund", ref)
+        if isinstance(e, llm.LLMError):
+            raise ApiError(502, "ai_failed", str(e))
+        raise
     iid = save_image(d, user.id, data, w, h)
     return {"image_id": iid, "width": w, "height": h, "style": body.style}
 

@@ -79,6 +79,24 @@ class Settings:
     online_window_s: int = field(default_factory=lambda: _int("ONLINE_WINDOW_S", 180))
     # a session not used for this many days stops working (a lost or stolen phone is signed out by itself)
     session_idle_days: int = field(default_factory=lambda: _int("SESSION_IDLE_DAYS", 90))
+    # coins: a scene picture and an AI avatar cost coins; text chat and voice-over are free
+    coins_start_bonus: int = field(default_factory=lambda: _int("COINS_START_BONUS", 100))
+    cost_scene_image: int = field(default_factory=lambda: _int("COST_SCENE_IMAGE", 10))
+    cost_avatar: int = field(default_factory=lambda: _int("COST_AVATAR", 10))
+    # Elite (monthly): prices are preliminary until payments are connected
+    elite_price_rub: int = field(default_factory=lambda: _int("ELITE_PRICE_RUB", 299))
+    elite_days: int = 30
+    elite_monthly_coins: int = field(default_factory=lambda: _int("ELITE_MONTHLY_COINS", 300))
+    # payments: YooKassa when both keys are set, otherwise the stub (no real payment). PAYMENTS_TEST_MODE=on lets the
+    # stub "pay" at once — only for tests: in production it would hand out coins for free
+    yookassa_shop_id: str = field(default_factory=lambda: _env("YOOKASSA_SHOP_ID", "").strip())
+    yookassa_secret_key: str = field(default_factory=lambda: _env("YOOKASSA_SECRET_KEY", "").strip())
+    yookassa_api_url: str = field(default_factory=lambda: _env("YOOKASSA_API_URL", "https://api.yookassa.ru/v3"))
+    payments_test_mode: bool = field(default_factory=lambda: _env("PAYMENTS_TEST_MODE", "off").lower() in ("1", "on", "true", "yes"))
+    public_url: str = field(default_factory=lambda: (_env("PUBLIC_URL", "") or (
+        "https://" + _env("DOMAIN", "") if _env("DOMAIN", "") else "")).rstrip("/"))
+    rl_posts_per_hour: int = field(default_factory=lambda: _int("RL_POSTS_PER_HOUR", 20))
+    rl_comments_per_hour: int = field(default_factory=lambda: _int("RL_COMMENTS_PER_HOUR", 120))
     about_max_chars: int = 300
     # the small local model (Ollama) is off by default: every room uses the cloud model
     local_ai: bool = field(default_factory=lambda: _env("LOCAL_AI", "off").lower() in ("1", "on", "true", "yes"))

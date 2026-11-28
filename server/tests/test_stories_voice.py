@@ -423,6 +423,7 @@ async def test_picture_reference_lookups_use_indexes(client):
     import app.main as main
     db = main.state.db
     for table, col in (("messages", "image_id"), ("image_jobs", "image_id"), ("characters", "avatar_image_id"),
-                       ("personas", "avatar_image_id"), ("stories", "cover_image_id"), ("users", "avatar_image_id")):
+                       ("personas", "avatar_image_id"), ("stories", "cover_image_id"), ("users", "avatar_image_id"),
+                       ("post_images", "image_id"), ("users", "banner_image_id")):
         plan = " ".join(r[3] for r in db.all(f"EXPLAIN QUERY PLAN SELECT 1 FROM {table} WHERE {col}=? LIMIT 1", ("x",)))
         assert "USING INDEX" in plan or "USING COVERING INDEX" in plan, (table, plan)

@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from . import admin as A, crypto, llm, nick as nickmod, personas as PS, rooms as R, stories as S, usage, voice as V
+from . import admin as A, coins as C, crypto, feed as F, llm, looks as L, nick as nickmod, personas as PS, rooms as R, stories as S, usage, voice as V
 from .common import (ApiError, User, auth_user, client_ip, hash_password, request_token, hash_token, hub, new_id, new_token, not_found,
                      verify_password)
 from .config import settings
@@ -47,6 +47,7 @@ async def _encrypt_old_files() -> None:
 async def lifespan(app: FastAPI):
     os.makedirs(settings.images_dir, exist_ok=True)
     state.db = Database(settings.db_path, crypto.db_key_hex())
+    C.start_bonus_for_existing(state.db)
     # files stored before encryption was switched on are encrypted in place, in the background
     files = asyncio.create_task(_encrypt_old_files())
     PS.seed_demo(state.db)
@@ -152,9 +153,10 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
                         (new_id(), nick, key, pw_hash, ts))
             d.run("INSERT INTO sessions(token_hash, user_id, created_at, last_seen_at) VALUES(?,?,?,?)",
                   (hash_token(token), cur.lastrowid, ts, ts))
+            C.give_start_bonus(d, cur.lastrowid)
     except INTEGRITY_ERRORS:
         raise ApiError(409, "nick_taken", "Этот ник уже занят. Придумай другой.")
-    u = d.one("SELECT * FROM users WHERE id=?", (cur.lastrowid,))
+    u = _me_row(d, cur.lastrowid)
     user = User(u["id"], u["public_id"], u["nick"])
     demo = None
     if settings.demo_content:  # sample story only in tests
@@ -166,13 +168,12 @@ async def register(body: RegisterIn, request: Request, d: Database = Depends(db)
 
 
 def _user_dict(row) -> dict:
-    """Public profile of a user: what anyone who finds them by nick may see."""
-    return {"id": row["public_id"], "nick": row["nick"], "avatar_image_id": row["avatar_image_id"],
-            "about": row["about"] or ""}
+    """Public profile of a user: what anyone who finds them by nick may see (with Elite and its look)."""
+    return L.user_dict(row)
 
 
 def _user_by_id(d: Database, uid: int):
-    return d.one("SELECT id, public_id, nick, avatar_image_id, about FROM users WHERE id=?", (uid,))
+    return L.user_by_id(d, uid)
 
 
 def _last_seen(d: Database, ids: list[int]) -> dict[int, int]:
@@ -195,11 +196,18 @@ def _me_dict(row) -> dict:
     out = _user_dict(row)
     out["has_password"] = bool(full["password_hash"]) if full is not None else False
     out["gender"] = (row["gender"] if "gender" in row.keys() else "") or ""
+    keys = row.keys()
+    if "coins" in keys:
+        out["coins"] = row["coins"]
+        out["elite_until"] = row["elite_until"] if out["elite"] else None
+        # the player's own choices (kept while Elite is over, they come back with it)
+        out["looks_choice"] = {"nick_style": row["nick_style"] or "", "frame": row["frame"] or "",
+                               "banner_image_id": row["banner_image_id"]}
     return out
 
 
 def _me_row(d: Database, uid: int):
-    return d.one("SELECT id, public_id, nick, avatar_image_id, about, password_hash, gender FROM users WHERE id=?", (uid,))
+    return d.one(f"SELECT {L.USER_COLS}, password_hash, gender, coins FROM users WHERE id=?", (uid,))
 
 
 @app.get("/v1/me")
@@ -419,7 +427,7 @@ async def search_user(q: str | None = None, nick: str | None = None, user: User 
         x = nickmod.clean(nick or "")
         if len(x) < nickmod.MIN_LEN or len(x) > nickmod.MAX_LEN:
             raise not_found("Игрок с таким ником не найден")
-        row = d.one("SELECT id, public_id, nick, avatar_image_id, about FROM users WHERE nick_key=?", (nickmod.key(x),))
+        row = d.one(f"SELECT {L.USER_COLS} FROM users WHERE nick_key=?", (nickmod.key(x),))
         if not row:
             raise not_found("Игрок с таким ником не найден")
         rel, rid = _relation(d, user.id, row["id"])
@@ -428,7 +436,7 @@ async def search_user(q: str | None = None, nick: str | None = None, user: User 
     if len(qk) < settings.search_min_chars:
         return {"users": []}
     rows = d.all(
-        "SELECT id, public_id, nick, avatar_image_id, about, instr(nick_key, ?) AS pos FROM users "
+        f"SELECT {L.USER_COLS}, instr(nick_key, ?) AS pos FROM users "
         "WHERE instr(nick_key, ?) > 0 AND id<>? ORDER BY (nick_key=?) DESC, pos, length(nick_key), nick_key LIMIT ?",
         (qk, qk, user.id, qk, settings.search_max_results),
     )
@@ -441,14 +449,25 @@ async def search_user(q: str | None = None, nick: str | None = None, user: User 
 
 @app.get("/v1/users/{uid}")
 async def user_profile(uid: str, user: User = Depends(current_user), d: Database = Depends(db)):
-    row = d.one("SELECT id, public_id, nick, avatar_image_id, about FROM users WHERE public_id=?", (uid,))
+    row = d.one(f"SELECT {L.USER_COLS} FROM users WHERE public_id=?", (uid,))
     if not row:
         raise not_found("Игрок не найден")
     rel, rid = _relation(d, user.id, row["id"])
     item = _user_dict(row)
     if rel in ("friends", "outgoing_accepted", "self"):
         _with_presence(item, _last_seen(d, [row["id"]]).get(row["id"]))
-    return {"user": item, "relation": rel, "request_id": rid}
+    # the public profile page: pinned stories, followers, posts
+    return {"user": item, "relation": rel, "request_id": rid, "pinned_stories": L.pinned_stories(d, user, row["id"]),
+            **F.follow_counts(d, user, row["id"])}
+
+
+@app.get("/v1/users/{uid}/banner")
+async def user_banner(uid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    row = d.one(f"SELECT {L.USER_COLS} FROM users WHERE public_id=?", (uid,))
+    banner = L.look_of(row)["banner_image_id"] if row else None
+    if not banner:
+        raise not_found("Баннера нет")
+    return _image_response(banner)
 
 
 class FriendRequestIn(BaseModel):
@@ -630,7 +649,7 @@ async def get_room_image(room_id: str, iid: str, user: User = Depends(current_us
 # ---------------------------------------------------------------------------
 @app.get("/v1/personas")
 async def list_personas(q: str = "", scope: str = "all", user: User = Depends(current_user), d: Database = Depends(db)):
-    if scope not in ("all", "mine", "drafts", "public"):
+    if scope not in ("all", "mine", "drafts", "public", "foryou", "new", "favorites"):
         raise ApiError(400, "bad_scope", "Неизвестный раздел.")
     return PS.listing(d, user, q[:100], scope)
 
@@ -966,6 +985,148 @@ async def message_speech(room_id: str, message_id: str, user: User = Depends(cur
 
 
 # ---------------------------------------------------------------------------
+# the look of a profile (Elite): nick style, frame, banner; pinned stories
+# ---------------------------------------------------------------------------
+@app.get("/v1/looks")
+async def looks_catalog(user: User = Depends(current_user)):
+    return L.catalog()
+
+
+@app.patch("/v1/me/looks")
+async def update_looks(body: L.LooksIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    L.set_looks(d, user, body)
+    return {"user": _me_dict(_me_row(d, user.id))}
+
+
+@app.put("/v1/me/pins")
+async def update_pins(body: L.PinsIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    return {"pinned_stories": L.set_pins(d, user, body)}
+
+
+# ---------------------------------------------------------------------------
+# favourite characters
+# ---------------------------------------------------------------------------
+@app.put("/v1/personas/{pid}/favorite")
+async def favorite_on(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"fav:{user.id}", 120, 3600)
+    return PS.set_favorite(d, user, pid, True)
+
+
+@app.delete("/v1/personas/{pid}/favorite")
+async def favorite_off(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return PS.set_favorite(d, user, pid, False)
+
+
+# ---------------------------------------------------------------------------
+# the feed: posts, likes, comments, following
+# ---------------------------------------------------------------------------
+@app.get("/v1/posts")
+async def posts(tab: str = "all", before: str | None = None, user_id: str | None = None, tag: str | None = None,
+                user: User = Depends(current_user), d: Database = Depends(db)):
+    if tab not in ("all", "following", "user"):
+        raise ApiError(400, "bad_tab", "Неизвестный раздел.")
+    return F.list_posts(d, user, tab, before, user_id, tag)
+
+
+@app.post("/v1/posts", status_code=201)
+async def create_post(body: F.PostIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"post:{user.id}", settings.rl_posts_per_hour, 3600, "Слишком много публикаций за час. Попробуй позже.")
+    return {"post": F.create_post(d, user, body)}
+
+
+@app.delete("/v1/posts/{pid}")
+async def delete_post(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    F.delete_own_post(d, user, pid)
+    return {"ok": True}
+
+
+@app.put("/v1/posts/{pid}/like")
+async def like_post(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"like:{user.id}", 300, 3600)
+    return {"post": F.set_like(d, user, pid, True)}
+
+
+@app.delete("/v1/posts/{pid}/like")
+async def unlike_post(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return {"post": F.set_like(d, user, pid, False)}
+
+
+@app.get("/v1/posts/{pid}/comments")
+async def post_comments(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return F.list_comments(d, user, pid)
+
+
+@app.post("/v1/posts/{pid}/comments", status_code=201)
+async def add_comment(pid: str, body: F.CommentIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"comment:{user.id}", settings.rl_comments_per_hour, 3600, "Слишком много комментариев. Попробуй позже.")
+    return {"comment": F.add_comment(d, user, pid, body)}
+
+
+@app.delete("/v1/comments/{cid}")
+async def delete_comment(cid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    F.delete_comment(d, user, cid)
+    return {"ok": True}
+
+
+@app.get("/v1/posts/{pid}/images/{iid}")
+async def post_image(pid: str, iid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    if not F.post_image_allowed(d, pid, iid):
+        raise not_found("Изображение не найдено")
+    return _image_response(iid)
+
+
+@app.put("/v1/users/{uid}/follow")
+async def follow(uid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"follow:{user.id}", 200, 3600)
+    return F.set_follow(d, user, uid, True)
+
+
+@app.delete("/v1/users/{uid}/follow")
+async def unfollow(uid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return F.set_follow(d, user, uid, False)
+
+
+# ---------------------------------------------------------------------------
+# coins and Elite: balance, prices, payments (YooKassa or the stub), history
+# ---------------------------------------------------------------------------
+@app.get("/v1/shop")
+async def shop(user: User = Depends(current_user), d: Database = Depends(db)):
+    return C.shop(d, user)
+
+
+@app.get("/v1/me/coins/history")
+async def coins_history(user: User = Depends(current_user), d: Database = Depends(db)):
+    return {"items": C.ledger(d, user)}
+
+
+@app.post("/v1/payments", status_code=201)
+async def create_payment(body: C.PaymentIn, user: User = Depends(current_user), d: Database = Depends(db)):
+    rate(f"pay:{user.id}", 20, 3600, "Слишком много попыток оплаты. Попробуй позже.")
+    return {"payment": await C.create_payment(d, user, body)}
+
+
+@app.get("/v1/payments/{pid}")
+async def payment(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return {"payment": C.get_payment(d, user, pid)}
+
+
+@app.post("/v1/payments/{pid}/confirm-test")
+async def confirm_test_payment(pid: str, user: User = Depends(current_user), d: Database = Depends(db)):
+    return {"payment": C.confirm_test_payment(d, user, pid), "shop": C.shop(d, user)}
+
+
+@app.post("/v1/payments/yookassa/webhook")
+async def yookassa_webhook(request: Request, d: Database = Depends(db)):
+    rate(f"ykwh:{client_ip(request)}", 120, 60)
+    try:
+        payload = await request.json()
+    except Exception:
+        raise ApiError(400, "bad_request", "Некорректные данные.")
+    await C.yookassa_webhook(d, payload if isinstance(payload, dict) else {})
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # admin page: users with spent tokens, players' photos. Password = ADMIN_PASSWORD_HASH in .env
 # ---------------------------------------------------------------------------
 ADMIN_TTL_MS = 12 * 3600 * 1000
@@ -1035,4 +1196,34 @@ async def admin_photo(iid: str, _: None = Depends(current_admin), d: Database = 
 async def admin_delete_photo(iid: str, _: None = Depends(current_admin), d: Database = Depends(db)):
     if not R.delete_chat_photo(d, iid, "Фото удалено администратором."):
         raise not_found("Фото не найдено")
+    return {"ok": True}
+
+
+@app.post("/v1/admin/users/{public_id}/grant")
+async def admin_grant(public_id: str, body: C.GrantIn, _: None = Depends(current_admin), d: Database = Depends(db)):
+    res = C.grant(d, public_id, body)
+    if res is None:
+        raise not_found("Игрок не найден")
+    return res
+
+
+@app.get("/v1/admin/posts")
+async def admin_posts(_: None = Depends(current_admin), d: Database = Depends(db)):
+    return F.admin_posts(d)
+
+
+@app.get("/v1/admin/posts/{pid}/images/{iid}")
+async def admin_post_image(pid: str, iid: str, _: None = Depends(current_admin), d: Database = Depends(db)):
+    if not F.post_image_allowed(d, pid, iid):
+        raise not_found("Изображение не найдено")
+    return _image_response(iid)
+
+
+@app.delete("/v1/admin/posts/{pid}")
+async def admin_delete_post(pid: str, _: None = Depends(current_admin), d: Database = Depends(db)):
+    p = d.one("SELECT * FROM posts WHERE public_id=?", (pid,))
+    if not p:
+        raise not_found("Публикация не найдена")
+    F.delete_post(d, p)
+    log.info("admin deleted post %s", pid)
     return {"ok": True}

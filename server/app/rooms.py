@@ -623,11 +623,15 @@ def request_photo(db: Database, user: User, room_pid: str, body: PhotoIn, wake_w
     used = db.one("SELECT COUNT(*) n FROM image_jobs WHERE requested_by=? AND created_at>?", (user.id, day_ago))["n"]
     if used >= settings.rl_images_per_day:
         raise ApiError(429, "rate_limited", f"Лимит фото на сегодня исчерпан ({settings.rl_images_per_day}).")
+    from . import coins
+    cost = settings.cost_scene_image
     with db.tx():
+        jpid = new_id()
+        coins.charge(db, user.id, cost, "scene_image", jpid)  # refunded if the picture fails
         jid = db.run(
-            "INSERT INTO image_jobs(public_id, room_id, requested_by, client_id, user_prompt, status, created_at) "
-            "VALUES(?,?,?,?,?, 'queued', ?)",
-            (new_id(), room["id"], user.id, body.client_id, body.prompt.strip(), now_ms()),
+            "INSERT INTO image_jobs(public_id, room_id, requested_by, client_id, user_prompt, status, created_at, cost) "
+            "VALUES(?,?,?,?,?, 'queued', ?, ?)",
+            (jpid, room["id"], user.id, body.client_id, body.prompt.strip(), now_ms(), cost),
         ).lastrowid
         _bump(db, room["id"])
     _notify_room(room["id"])

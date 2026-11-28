@@ -33,7 +33,8 @@ async def make_client(data_dir: str | None = None):
     import app.personas as personas
     import app.admin as admin
     import app.voice as voice
-    for m in (main, rooms, stories, worker, llm, images, personas, admin, voice):
+    import app.coins as coins
+    for m in (main, rooms, stories, worker, llm, images, personas, admin, voice, coins):
         m.settings = config.settings
     from app.ratelimit import limiter
 
