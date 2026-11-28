@@ -295,6 +295,29 @@ async function apiAs(token, p, method = 'GET', body) {
       ok('admin deletes a test account', !gone.token);
       const msgs = await page.goto(base + '/app/#/chats');
     }
+
+    // computer: a sidebar instead of the tab bar, the list of chats next to the open chat, Enter sends
+    const dk = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const desk = await apiAs(null, '/v1/register', 'POST', { nick: uniq('Desk'), password: 'desk-pass-1' });
+    await dk.addInitScript(([t, u]) => { localStorage.setItem('gs_token', t); localStorage.setItem('gs_me', u); },
+      [desk.token, JSON.stringify(desk.user)]);
+    const p5 = await dk.newPage();
+    watch(p5);
+    await p5.goto(base + '/app/#/characters');
+    await p5.waitForSelector('#sidenav #side-characters.on');
+    ok('computer: sidebar instead of the bottom tab bar', !(await p5.isVisible('#tab-characters')) && await p5.isVisible('#side-create'));
+    await p5.screenshot({ path: `${out}/web_10_desktop_characters.png` });
+    const dp = (await apiAs(desk.token, '/v1/personas?scope=all')).personas[0];
+    const droom = (await apiAs(desk.token, `/v1/personas/${dp.id}/chats`, 'POST')).room;
+    await p5.click('#side-chats');
+    await p5.waitForSelector(`[data-room="${droom.id}"]`);
+    await p5.click(`[data-room="${droom.id}"]`);
+    await p5.waitForSelector(`#rooms-rail [data-rail-room="${droom.id}"].on`);
+    await p5.fill('#chat-input', 'Привет с компьютера');
+    await p5.keyboard.press('Enter');
+    await p5.waitForSelector('.m-row.mine >> text=Привет с компьютера', { timeout: 15000 });
+    ok('computer: the list of chats next to the chat, Enter sends', true);
+    await p5.screenshot({ path: `${out}/web_11_desktop_chat.png` });
   } catch (e) {
     ok('scenario', false, String(e).slice(0, 300));
     await shot('web_error').catch(() => {});

@@ -4,7 +4,7 @@
    textContent / text nodes (never innerHTML). */
 'use strict';
 
-const WEB_VERSION = '1.6';
+const WEB_VERSION = '1.7';
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -233,6 +233,7 @@ function avatar(name, path, size = 40, extra) {
   return el;
 }
 const userAvatarPath = (u) => (u && u.avatar_image_id ? `/v1/users/${u.id}/avatar?v=${u.avatar_image_id}` : null);
+const preview = (s) => (s || '').replace(/\*/g, '').replace(/\s+/g, ' ').trim();  // a list line without *action* marks
 const personaAvatarPath = (p) => (p && p.avatar_image_id ? `/v1/personas/${p.id}/avatar?v=${p.avatar_image_id}` : null);
 
 // shrink photos before upload (and turn iPhone HEIC into JPEG)
@@ -323,6 +324,32 @@ function tabPage(root, current, title, subtitle) {
   root.append(page, bar);
   return page;
 }
+// computers: a sidebar instead of the bottom tab bar (shown by CSS from 960 px wide)
+const WIDE = window.matchMedia('(min-width: 960px)');
+const VERY_WIDE = window.matchMedia('(min-width: 1200px)');
+const FINE_POINTER = window.matchMedia('(hover: hover) and (pointer: fine)');
+function sideNav() {
+  const hash = location.hash || '#/characters';
+  const current = /^#\/chats?(\/|$)/.test(hash) ? 'chats' : /^#\/friends/.test(hash) ? 'friends'
+    : /^#\/profile/.test(hash) ? 'profile' : 'characters';
+  const me = store.me || {};
+  return h('aside', { class: 'sidenav', id: 'sidenav' },
+    h('button', { class: 'side-brand', 'aria-label': 'GramSoul', onclick: () => { location.hash = '#/characters'; } },
+      h('img', { src: 'icon-192.png', alt: '' }), h('span', null, 'Gram', h('b', null, 'Soul'))),
+    h('nav', { class: 'side-links' }, TABS.map(([id, label, ic]) => {
+      const n = id === 'chats' ? badges.chats : id === 'friends' ? badges.friends : 0;
+      return h('button', { class: 'side-link' + (id === current ? ' on' : ''), id: 'side-' + id, onclick: () => { location.hash = '#/' + id; } },
+        icon(ic, 22), h('span', { class: 'grow' }, label),
+        (id === 'chats' || id === 'friends') ? h('span', { class: 'side-badge' + (n ? '' : ' hidden'), 'data-badge': id }, n) : null);
+    })),
+    h('button', { class: 'btn primary wide side-create', id: 'side-create', onclick: createSheet }, icon('plus', 20), 'Создать'),
+    h('div', { class: 'grow' }),
+    h('button', { class: 'side-me', id: 'side-me', onclick: () => { location.hash = '#/profile'; } },
+      avatar(me.nick || '?', userAvatarPath(me), 36),
+      h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 'ellipsis', style: 'font-weight:600' }, me.nick || ''),
+        h('div', { class: 'faint small' }, 'Профиль'))));
+}
+
 function subPage(root, title, backHash, actions) {
   const page = h('div', { class: 'page', style: 'padding-bottom:calc(var(--safe-b) + 32px)' });
   const bar = h('div', { class: 'topbar' },
@@ -581,6 +608,7 @@ function storyItem(st) {
 
 function screenCharacters(root) {
   const page = tabPage(root, 'characters', 'Персонажи', (store.me && store.me.nick) || '');
+  page.classList.add('page-wide');
   let scope = sessionStorage.getItem('gs_scope') || 'all';
   let q = '';
   let seq = 0;
@@ -680,14 +708,15 @@ async function screenPersona(root, id) {
       render();
     } catch (e) { toast(e.message); }
   });
-  put(page, portrait,
+  page.classList.add('page-wide');
+  put(page, h('div', { class: 'detail' }, put(h('div', { class: 'detail-side' }), portrait,
     h('div', { class: 'center', style: 'font-size:24px;font-weight:700' }, name),
     h('div', { class: 'center muted' }, p.is_demo ? 'Персонаж GramSoul' : p.mine ? 'Твой персонаж' : 'Автор: ' + ((p.author && p.author.nick) || '—')),
-    tags, actions, pubBtn,
+    tags, actions, pubBtn), put(h('div', { class: 'detail-main' }),
     p.description ? [h('div', { class: 'section' }, 'Описание'), h('div', { style: 'white-space:pre-wrap' }, p.description)] : null,
     p.first_message ? [h('div', { class: 'section' }, 'Первое сообщение'), h('div', { class: 'bubble char', style: 'user-select:text' }, richText(p.first_message, true))] : null,
     p.mine && p.personality ? [h('div', { class: 'section' }, 'Характер · видно только тебе'), h('div', { class: 'muted', style: 'white-space:pre-wrap' }, p.personality)] : null,
-    p.mine && p.backstory ? [h('div', { class: 'section' }, 'Предыстория · видно только тебе'), h('div', { class: 'muted', style: 'white-space:pre-wrap' }, p.backstory)] : null);
+    p.mine && p.backstory ? [h('div', { class: 'section' }, 'Предыстория · видно только тебе'), h('div', { class: 'muted', style: 'white-space:pre-wrap' }, p.backstory)] : null)));
 }
 
 function counted(label, el, max) {
@@ -897,15 +926,17 @@ async function screenStory(root, id) {
     avatar(c.name, c.avatar_image_id ? `/v1/stories/${id}/images/${c.avatar_image_id}` : null, 44),
     h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 't' }, c.name, c.role === 'hero' ? h('span', { class: 'pill lilac', style: 'margin-left:6px' }, 'герой игрока') : null),
       c.appearance || c.personality ? h('div', { class: 's', style: 'display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden' }, c.appearance || c.personality) : null)));
-  put(page,
+  page.classList.add('page-wide');
+  put(page, h('div', { class: 'detail story' }, put(h('div', { class: 'detail-side' }),
     cover ? h('div', { class: 'story-cover' }, authImg(cover, st.title)) : null,
     h('div', { class: 'center', style: 'font-size:24px;font-weight:700;margin-top:8px' }, st.title),
     h('div', { class: 'center muted' }, st.mine ? (pub ? 'Твоя история · публичная' : 'Твоя история · личная') : 'Автор: ' + ((st.author && st.author.nick) || '—')),
     h('div', { class: 'row', style: 'margin-top:14px' }, solo, withFriend), pubBtn,
-    !st.mine ? h('div', { class: 'hint' }, 'Ты сыграешь свою копию истории — её можно менять, оригинал автора не изменится.') : null,
+    !st.mine ? h('div', { class: 'hint' }, 'Ты сыграешь свою копию истории — её можно менять, оригинал автора не изменится.') : null),
+    put(h('div', { class: 'detail-main' }),
     st.description ? [h('div', { class: 'section' }, 'О чём'), h('div', { style: 'white-space:pre-wrap' }, st.description)] : null,
     st.world_rules ? [h('div', { class: 'section' }, 'Мир'), h('div', { class: 'muted', style: 'white-space:pre-wrap' }, st.world_rules)] : null,
-    chars.length ? [h('div', { class: 'section' }, 'Персонажи'), chars] : null);
+    chars.length ? [h('div', { class: 'section' }, 'Персонажи'), chars] : null)));
 }
 
 /** Story editor: world, place, several characters (with voices), first messages, visibility. */
@@ -1063,7 +1094,7 @@ async function screenChats(root) {
           avatar(room.story_title, room.cover_image_id ? `/v1/rooms/${room.id}/images/${room.cover_image_id}` : null, 48),
           h('div', { class: 'grow' },
             h('div', { class: 't ellipsis' }, room.story_title),
-            h('div', { class: 's ellipsis' }, room.last_message || '')),
+            h('div', { class: 's ellipsis' }, preview(room.last_message))),
           h('span', { class: 'pill ' + (room.kind === 'chat' ? '' : 'lilac') }, room.kind === 'chat' ? 'чат' : room.partner ? 'вдвоём' : 'сцена')));
       }
       box.replaceChildren(...items);
@@ -1152,6 +1183,25 @@ function screenChat(root, rid) {
     h('div', { class: 'inputrow' }, h('div', { class: 'inputwrap' }, input, starBtn), sendBtn));
   const chat = h('div', { class: 'chat' }, top, offline, list, composer);
   root.append(chat);
+  let railTimer = 0;
+  if (VERY_WIDE.matches) {
+    const rail = h('aside', { class: 'rooms-rail', id: 'rooms-rail' });
+    root.append(rail);
+    chat.classList.add('with-rail');
+    const loadRail = async () => {
+      try {
+        const r = await api('/v1/rooms');
+        if (!alive) return;
+        fill(rail, h('div', { class: 'rail-title' }, 'Чаты'), r.rooms.map((room) =>
+          h('button', { class: 'rail-item' + (room.id === rid ? ' on' : ''), 'data-rail-room': room.id, onclick: () => { location.hash = '#/chat/' + room.id; } },
+            avatar(room.story_title, room.cover_image_id ? `/v1/rooms/${room.id}/images/${room.cover_image_id}` : null, 40),
+            h('div', { class: 'grow', style: 'min-width:0' }, h('div', { class: 't ellipsis' }, room.story_title),
+              h('div', { class: 's ellipsis' }, preview(room.last_message))))));
+      } catch (_) { /* the chat works without the list */ }
+    };
+    loadRail();
+    railTimer = setInterval(loadRail, 20000);
+  }
   const unfit = fitToViewport(chat);
 
   const active = () => st.gen && (st.gen.status === 'queued' || st.gen.status === 'running');
@@ -1503,7 +1553,10 @@ function screenChat(root, rid) {
   }
 
   input.addEventListener('input', () => { sendBtn.disabled = !input.value.trim(); });
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); } });
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    if (e.ctrlKey || e.metaKey || (FINE_POINTER.matches && !e.shiftKey)) { e.preventDefault(); send(); }
+  });
   // "*": a pair of stars with the cursor between them; the keyboard stays open
   starBtn.addEventListener('pointerdown', (e) => e.preventDefault());
   starBtn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -1567,7 +1620,7 @@ function screenChat(root, rid) {
   });
 
   loop();
-  return () => { alive = false; ctrl.abort(); unfit(); stopVoice(); document.removeEventListener('voice-state', onVoice); };
+  return () => { alive = false; clearInterval(railTimer); ctrl.abort(); unfit(); stopVoice(); document.removeEventListener('voice-state', onVoice); };
 }
 
 // ------------------------------------------------------------------ friends
@@ -1837,7 +1890,7 @@ async function screenProfile(root) {
     manageList('Мои чаты', 'my-rooms', async () => (await api('/v1/rooms')).rooms, (r, refresh) =>
       h('div', { class: 'list-item' },
         h('button', { class: 'grow', style: 'background:none;border:0;text-align:left;padding:0', onclick: () => { location.hash = '#/chat/' + r.id; } },
-          h('div', { class: 't ellipsis' }, r.story_title), h('div', { class: 's ellipsis' }, r.last_message || '')),
+          h('div', { class: 't ellipsis' }, r.story_title), h('div', { class: 's ellipsis' }, preview(r.last_message))),
         trashButton(r.my_role === 'owner' ? 'Удалить' : 'Выйти', r.my_role === 'owner' ? 'Удалить переписку?' : 'Выйти из сцены?',
           r.my_role === 'owner' ? 'Переписка удалится навсегда.' : 'Ты больше не увидишь эту сцену.',
           async () => { await api('/v1/rooms/' + r.id, { method: 'DELETE' }); refresh(); }))),
@@ -1884,6 +1937,9 @@ async function render() {
   const root = $('#app');
   root.replaceChildren();
   window.scrollTo(0, 0);
+  const signedIn = !!store.token && !/^#\/(login|set-password)$/.test(hash);
+  root.classList.toggle('with-side', signedIn);
+  if (signedIn) root.append(sideNav());
   const args = hash.match(route[0]).slice(1);
   const res = await route[1](root, ...args);
   if (my === renderSeq && typeof res === 'function') cleanup = res;
